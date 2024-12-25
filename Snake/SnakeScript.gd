@@ -14,13 +14,22 @@ var wave_frequency = 20.0  # Frequency of the wave
 @onready var camera: Camera2D = get_node_or_null("/root/Game/Camera2D")
 @onready var score_label: Label = get_node_or_null("/root/Game/Camera2D/ScoreLabel")
 
+var collision_cooldown = false
 func _on_area_2d_area_entered(colliding_area: Area2D):
+	if collision_cooldown:
+		return
+
+	collision_cooldown = true
+
 	var food = colliding_area.get_owner()
+	food.respawn()
 	var new_score: int = food.score if food else null
 	if new_score:
 		self.grow(new_score)
-		food.respawn()
 		score_label.text = str(score)
+
+	await get_tree().create_timer(0.1).timeout
+	collision_cooldown = false
 
 func _ready():
 	line.hide()
@@ -92,7 +101,7 @@ func adjust_head_collision():
 		Vector2(0, (line.width/2) + 1)
 	])
 
-	collision.polygon = head_polygon
+	collision.call_deferred("set_polygon", head_polygon)
 
 func update_head_collision():
 	if area and collision:
@@ -172,7 +181,7 @@ func grow(times: int = 1):
 		if speed > 100:
 			speed -= 2
 			
-		grow_width(line.get_point_count())
 		
 	score += times
+	grow_width(line.get_point_count())
 	adjust_width_curve()

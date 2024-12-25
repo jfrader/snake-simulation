@@ -100,13 +100,15 @@ func respawn():
 		current_type = choose_random_food_type()
 		set_food_type(current_type)
 		
+		# Spawn within the camera's view
 		var half_size = food_types[current_type]["size"] / 2
 		var random_x = randf_range(camera_position.x - camera_viewport_size.x / 2 + half_size, camera_position.x + camera_viewport_size.x / 2 - half_size)
 		var random_y = randf_range(camera_position.y - camera_viewport_size.y / 2 + half_size, camera_position.y + camera_viewport_size.y / 2 - half_size)
 		polygon.position = Vector2(random_x, random_y)
 
 		if collision:
-			collision.polygon = food_types[current_type]["polygon"]
+			# Use call_deferred to safely change the collision polygon during physics step
+			collision.call_deferred("set_polygon", food_types[current_type]["polygon"])
 		else:
 			push_error("Collision polygon not found during respawn!")
 	else:
