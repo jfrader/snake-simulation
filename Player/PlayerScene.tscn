@@ -1,0 +1,11 @@
+[gd_scene load_steps=3 format=3 uid="uid://c8xcslk1njmh4"]
+
+[ext_resource type="PackedScene" uid="uid://bd475760ymbuk" path="res://Snake/SnakeScene.tscn" id="1_bueqn"]
+[ext_resource type="Script" path="res://Player/PlayerScript.gd" id="1_l74xo"]
+
+[node name="Player" type="Node2D"]
+script = ExtResource("1_l74xo")
+
+[node name="Snake" parent="." instance=ExtResource("1_bueqn")]
+
+[editable path="Snake"]

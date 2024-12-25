@@ -1,0 +1,13 @@
+[gd_scene load_steps=2 format=3 uid="uid://bd475760ymbuk"]
+
+[ext_resource type="Script" path="res://Snake/SnakeScript.gd" id="2_lfgbi"]
+
+[node name="Snake" type="Node2D"]
+script = ExtResource("2_lfgbi")
+
+[node name="Line2D" type="Line2D" parent="."]
+
+[node name="Area2D" type="Area2D" parent="Line2D"]
+
+[node name="CollisionPolygon2D" type="CollisionPolygon2D" parent="Line2D/Area2D"]
+polygon = PackedVector2Array(0, 0)

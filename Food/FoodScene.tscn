@@ -1,0 +1,12 @@
+[gd_scene load_steps=2 format=3 uid="uid://bgsp4blnkuo6w"]
+
+[ext_resource type="Script" path="res://Food/FoodScript.gd" id="1_skp56"]
+
+[node name="Food" type="Node2D"]
+script = ExtResource("1_skp56")
+
+[node name="Polygon2D" type="Polygon2D" parent="."]
+
+[node name="Area2D" type="Area2D" parent="Polygon2D"]
+
+[node name="CollisionPolygon2D" type="CollisionPolygon2D" parent="Polygon2D/Area2D"]
