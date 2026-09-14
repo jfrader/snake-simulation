@@ -57,7 +57,7 @@ func _process(delta):
 	time += delta
 	
 	var head_position = points[0] + direction * speed * delta
-	points[0] = head_position  # Update head position without vibration
+	set_point_position(0, head_position)  # Update head position without vibration
 
 	for i in range(1, points.size()):  # Start from 1 to skip the head
 		var prev_position = points[i - 1]
@@ -70,7 +70,7 @@ func _process(delta):
 		var offset = vibration_direction * (sin(time * wave_frequency + i * 0.1) * wave_amplitude)
 		
 		# Smooth movement towards the previous point with added wave effect
-		points[i] = current_position.lerp(prev_position + offset, delta * (speed/10.0))
+		set_point_position(i, current_position.lerp(prev_position + offset, delta * (speed/10.0)))
 
 	update_head_collision()
 
