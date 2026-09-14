@@ -1,3 +1,3 @@
 # Snake Simulation
 
-Physics based body and movement simulation of snake game with a twist
+Code only body and movement simulation of snake game with a twist
