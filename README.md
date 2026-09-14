@@ -1,3 +1,3 @@
 # Snake Simulation
 
-Code only body and movement simulation of snake game with a twist
+Code only snake game with a twist
