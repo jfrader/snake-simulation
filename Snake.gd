@@ -1,6 +1,12 @@
 extends Line2D
 
-const HEAD_COLOR := Color(0.85, 1.0, 0.45)
+# The head keeps its rounded shape. It reads as a snake head from small organic
+# detail rather than a marker: eyes, and a tongue that flicks forward now and then.
+const EYE_COLOR := Color(0.06, 0.07, 0.06)
+const TONGUE_COLOR := Color(0.95, 0.36, 0.44)
+const TONGUE_INTERVAL := Vector2(1.1, 3.4)
+const TONGUE_FLICK_TIME := 0.24
+const TONGUE_REACH := 0.85
 # Eating is the twist: every segment adds girth and drag. The penalty is spent
 # as a fraction of the level's base speed so it is felt at every difficulty, and
 # floored so a maxed-out snake still moves.
@@ -12,7 +18,14 @@ var speed = start_speed
 var direction = Vector2.RIGHT
 var head_area: Area2D
 var collision_poly: CollisionPolygon2D
-var head_marker: Polygon2D
+var eye_left: Polygon2D
+var eye_right: Polygon2D
+var tongue_root: Node2D
+var tongue_stem: Line2D
+var tongue_prong_left: Line2D
+var tongue_prong_right: Line2D
+var tongue_clock := 0.0
+var tongue_next := 0.0
 # The game root, injected by Scene. Used instead of get_tree().current_scene so
 # the scene keeps working when it is instanced inside another scene.
 var game = null
@@ -72,14 +85,46 @@ func create_head_collision():
 	collision_poly = CollisionPolygon2D.new()
 	collision_poly.name = "CollisionPolygon2D"
 	head_area.add_child(collision_poly)
-	# The body is symmetric, so the head carries a forward marker: without it
-	# you cannot tell which end leads or which way you are travelling.
-	head_marker = Polygon2D.new()
-	head_marker.name = "HeadMarker"
-	head_marker.color = HEAD_COLOR
-	head_area.add_child(head_marker)
-	adjust_head_collision()
 	
+	eye_left = _make_dot(EYE_COLOR)
+	eye_right = _make_dot(EYE_COLOR)
+	head_area.add_child(eye_left)
+	head_area.add_child(eye_right)
+	
+	tongue_root = Node2D.new()
+	tongue_root.name = "Tongue"
+	tongue_root.hide()
+	head_area.add_child(tongue_root)
+	tongue_stem = _make_tongue_line()
+	tongue_prong_left = _make_tongue_line()
+	tongue_prong_right = _make_tongue_line()
+	tongue_root.add_child(tongue_stem)
+	tongue_root.add_child(tongue_prong_left)
+	tongue_root.add_child(tongue_prong_right)
+	_schedule_tongue()
+	
+	adjust_head_collision()
+
+func _make_dot(color: Color) -> Polygon2D:
+	var dot = Polygon2D.new()
+	var points = PackedVector2Array()
+	for i in range(8):
+		var angle = TAU * i / 8.0
+		points.append(Vector2(cos(angle), sin(angle)))
+	dot.polygon = points
+	dot.color = color
+	return dot
+
+func _make_tongue_line() -> Line2D:
+	var line = Line2D.new()
+	line.default_color = TONGUE_COLOR
+	line.begin_cap_mode = Line2D.LINE_CAP_ROUND
+	line.end_cap_mode = Line2D.LINE_CAP_ROUND
+	return line
+
+func _schedule_tongue():
+	tongue_next = randf_range(TONGUE_INTERVAL.x, TONGUE_INTERVAL.y)
+
 func adjust_head_collision():
 	var head_polygon = PackedVector2Array([
 		Vector2((-width/2) - 1, 0),
@@ -88,13 +133,50 @@ func adjust_head_collision():
 		Vector2(0, (width/2) + 1)
 	])
 	collision_poly.polygon = head_polygon
-	if head_marker:
-		var reach = (width / 2.0) + 2.0
-		head_marker.polygon = PackedVector2Array([
-			Vector2(reach * 1.35, 0),
-			Vector2(-reach * 0.45, reach),
-			Vector2(-reach * 0.45, -reach)
-		])
+	if not eye_left:
+		return
+	# The drawn head is a round cap of about 0.4 * width. Eye centre plus eye
+	# radius has to stay inside the body or the eyes sit off it and vanish
+	# against the background, so they sit just behind the snout where it widens.
+	var eye_x = -width * 0.06
+	var eye_y = width * 0.22
+	var eye_radius = clampf(width * 0.15, 1.3, 2.4)
+	eye_left.position = Vector2(eye_x, -eye_y)
+	eye_right.position = Vector2(eye_x, eye_y)
+	eye_left.scale = Vector2.ONE * eye_radius
+	eye_right.scale = Vector2.ONE * eye_radius
+	tongue_stem.width = clampf(width * 0.2, 1.2, 2.6)
+	tongue_prong_left.width = clampf(width * 0.16, 1.0, 2.2)
+	tongue_prong_right.width = tongue_prong_left.width
+
+func _update_tongue(delta: float):
+	if not tongue_root:
+		return
+	tongue_clock += delta
+	if tongue_clock >= tongue_next:
+		tongue_clock = 0.0
+		_schedule_tongue()
+		tongue_root.show()
+	
+	var progress = tongue_clock / TONGUE_FLICK_TIME
+	if not tongue_root.visible:
+		return
+	if progress > 1.0:
+		tongue_root.hide()
+		return
+	
+	# Out and back within the flick window.
+	var out = sin(clampf(progress, 0.0, 1.0) * PI)
+	var base = width / 2.0
+	var tip = base * 0.6 + width * TONGUE_REACH * out
+	var fork = width * 0.28 + 1.5
+	tongue_stem.points = PackedVector2Array([Vector2(base * 0.5, 0.0), Vector2(tip, 0.0)])
+	tongue_prong_left.points = PackedVector2Array([
+		Vector2(tip, 0.0), Vector2(tip + fork, -fork * 0.75)
+	])
+	tongue_prong_right.points = PackedVector2Array([
+		Vector2(tip, 0.0), Vector2(tip + fork, fork * 0.75)
+	])
 
 func _process(delta):
 	if not game or game.state != game.State.PLAYING:
@@ -113,6 +195,7 @@ func _process(delta):
 			self.modulate.a = 1.0
 
 	time += delta
+	_update_tongue(delta)
 	
 	var head_position = points[0] + direction * speed * delta
 	set_point_position(0, head_position)
@@ -124,7 +207,11 @@ func _process(delta):
 		var vibration_direction = Vector2(direction.y, -direction.x).normalized()
 		var offset = vibration_direction * (sin(time * wave_frequency + i * 0.1) * wave_amplitude)
 		
-		set_point_position(i, current_position.lerp(prev_position + offset, delta * (speed/10.0)))
+		# The follow factor must never exceed 1, or a point lands past the one
+		# ahead of it and the body inverts. It exceeds 1 on a frame hitch and at
+		# the higher level speeds.
+		var follow = clampf(delta * (speed / 10.0), 0.0, 1.0)
+		set_point_position(i, current_position.lerp(prev_position + offset, follow))
 
 	update_head_collision()
 
