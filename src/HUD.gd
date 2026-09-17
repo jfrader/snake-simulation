@@ -91,6 +91,10 @@ func show_message(text):
 	hint_label.hide()
 
 
+func set_paused(paused: bool) -> void:
+	pause_label.visible = paused
+
+
 func hide_message():
 	title_label.hide()
 	hint_label.hide()

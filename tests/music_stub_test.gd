@@ -31,13 +31,13 @@ class Stub extends Node:
 		states.append([area_phase, discovery, threat, quest_complete])
 		return true
 
-class TestMusic extends "res://MusicManager.gd":
+class TestMusic extends "res://src/MusicManager.gd":
 	func _create_player():
 		return Stub.new()
 
 func _init():
 	# Absent addon: the layer must be a silent no-op.
-	var absent = load("res://MusicManager.gd").new()
+	var absent = load("res://src/MusicManager.gd").new()
 	root.add_child(absent)
 	await process_frame
 	assert(absent.player == null, "no player when the addon is missing")

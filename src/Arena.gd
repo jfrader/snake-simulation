@@ -9,15 +9,15 @@ const TOP_MARGIN := 72.0
 
 var bounds: Rect2
 
-func _ready():
+func _ready() -> void:
 	recalculate()
 	get_viewport().size_changed.connect(_on_viewport_resized)
 
-func _on_viewport_resized():
+func _on_viewport_resized() -> void:
 	recalculate()
 	queue_redraw()
 
-func recalculate():
+func recalculate() -> void:
 	var viewport_size = get_viewport_rect().size
 	bounds = Rect2(
 		MARGIN,
@@ -26,6 +26,6 @@ func recalculate():
 		viewport_size.y - TOP_MARGIN - MARGIN
 	)
 
-func _draw():
+func _draw() -> void:
 	draw_rect(bounds, FLOOR_COLOR, true)
 	draw_rect(bounds, WALL_COLOR, false, WALL_WIDTH)
