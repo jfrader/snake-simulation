@@ -2,6 +2,7 @@ extends Polygon2D
 
 var collision_area: Area2D
 var collision_poly: CollisionPolygon2D
+var arena_bounds: Rect2
 
 var food_types = {
 	"apple": {
@@ -85,12 +86,21 @@ func create_collision(vec):
 	collision_area.add_child(collision_poly)
 
 func respawn(do_create_collision: bool):
-	var viewport_size = get_viewport().get_visible_rect().size
 	current_type = choose_random_food_type()
 	set_food_type(current_type)
 	
-	var random_x = randf_range(0 + food_types[current_type]["size"], viewport_size.x - food_types[current_type]["size"])
-	var random_y = randf_range(0 + food_types[current_type]["size"], viewport_size.y - food_types[current_type]["size"])
+	var random_x = 0.0
+	var random_y = 0.0
+	var fsize = food_types[current_type]["size"]
+	
+	if arena_bounds.size.x > 0:
+		random_x = randf_range(arena_bounds.position.x + fsize, arena_bounds.end.x - fsize)
+		random_y = randf_range(arena_bounds.position.y + fsize, arena_bounds.end.y - fsize)
+	else:
+		var viewport_size = get_viewport().get_visible_rect().size
+		random_x = randf_range(fsize, viewport_size.x - fsize)
+		random_y = randf_range(fsize, viewport_size.y - fsize)
+	
 	position = Vector2(random_x, random_y)
 	
 	if do_create_collision:
