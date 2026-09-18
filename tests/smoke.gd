@@ -10,6 +10,9 @@ class Recorder extends Node:
 	var cues := []
 	var runs := []
 
+	func start_menu():
+		pass
+
 	func start_run(seed, _style, _energy, _complexity, _brightness, _syncopation):
 		runs.append(seed)
 
@@ -240,6 +243,83 @@ func _init():
 	assert(main.lives == 3 and main.score == 0, "restart clears lives and score")
 	assert(main.snake.get_point_count() == main.snake.START_SEGMENTS, "restart resets the body")
 
+	# --- sound effects are synthesized with real data
+	assert(main.sfx.eat_player.stream.data.size() > 0, "eat blip has samples")
+	assert(main.sfx.death_player.stream.data.size() > 0, "death sweep has samples")
+	var slither = main.sfx.slither_player.stream
+	assert(slither.data.size() > 0, "movement bed has samples")
+	assert(slither.loop_mode == AudioStreamWAV.LOOP_FORWARD, "movement bed loops")
+	assert(slither.loop_end == slither.data.size() / 2, "loop end matches the data")
+	assert(slither.loop_end > slither.loop_begin, "loop region is valid")
+	# Seam check: the step across the loop point must not be an outlier compared
+	# with the steps inside the buffer, or it clicks every time round.
+	var frames = slither.loop_end
+	var biggest_step = 0
+	for i in range(1, frames):
+		biggest_step = maxi(biggest_step, absi(slither.data.decode_s16(i * 2) - slither.data.decode_s16((i - 1) * 2)))
+	var seam_step = absi(slither.data.decode_s16(0) - slither.data.decode_s16((frames - 1) * 2))
+	assert(seam_step <= biggest_step, "the loop seam is no worse than any internal step (seam %d, worst %d)" % [seam_step, biggest_step])
+
+	# the bed follows the playfield being live
+	main.go_to_menu()
+	assert(not main.sfx.slither_player.playing, "the bed is silent in the menu")
+	main.start_run()
+	await _settle()
+	assert(main.sfx.slither_player.playing, "the bed runs during play")
+	main.set_paused(true)
+	assert(not main.sfx.slither_player.playing, "the bed stops on pause")
+	main.set_paused(false)
+	assert(main.sfx.slither_player.playing, "the bed resumes")
+
+	# eating and dying actually fire their sounds
+	main.food.position = main.snake.points[0]
+	await _settle()
+	assert(main.sfx.eat_player.playing, "eating plays a sound")
+	# dying goes through the real path, not a direct call
+	main.snake.is_invulnerable = false
+	main.lives = 1
+	main.take_damage()
+	assert(main.state == main.State.GAME_OVER, "the last life ends the run")
+	assert(main.sfx.death_player.playing, "dying plays a sound")
+	assert(not main.sfx.slither_player.playing, "the bed stops when the run ends")
+
+	# --- the music is not fed a near-zero, always-the-same palette
+	var opening = main.RunScript.get_difficulty(0.0, 0.0)
+	assert(is_equal_approx(opening.energy, 0.62), "energy opens at the kit's own default")
+	assert(is_equal_approx(opening.complexity, 0.60), "complexity opens at the kit's own default")
+	assert(is_equal_approx(opening.brightness, 0.52), "brightness opens at the kit's own default")
+	assert(is_equal_approx(opening.syncopation, 0.70), "syncopation opens at the kit's own default")
+
+	# and they climb (or fall, for brightness) as pressure rises
+	var deep = main.RunScript.get_difficulty(400.0, 1.0)
+	assert(deep.pressure > opening.pressure, "deep pressure is actually deeper")
+	assert(deep.energy > opening.energy, "energy rises with pressure")
+	assert(deep.complexity > opening.complexity, "complexity rises with pressure")
+	assert(deep.syncopation > opening.syncopation, "motion rises with pressure")
+	assert(deep.brightness < opening.brightness, "wonder falls as it gets dangerous")
+	# `trait` is a reserved word in GDScript 4, hence `cfg`.
+	for cfg in [opening, deep]:
+		assert(cfg.energy >= 0.0 and cfg.energy <= 1.0, "energy stays in range")
+		assert(cfg.complexity >= 0.0 and cfg.complexity <= 1.0, "complexity stays in range")
+		assert(cfg.brightness >= 0.0 and cfg.brightness <= 1.0, "brightness stays in range")
+		assert(cfg.syncopation >= 0.0 and cfg.syncopation <= 1.0, "syncopation stays in range")
+
+	# the rotation is pinned, and never parks a run in the calm style the menu uses
+	var rotation = []
+	var seen_styles = {}
+	for i in range(main.RunScript.RUN_STYLES.size() * 2):
+		var style = main.RunScript.style_for_run(i)
+		rotation.append(style)
+		seen_styles[style] = true
+	assert(
+		seen_styles.size() == main.RunScript.RUN_STYLES.size(),
+		"the rotation reaches every run style (saw %s)" % [seen_styles.keys()]
+	)
+	assert(not seen_styles.has(main.MusicScript.MENU_STYLE),
+		"no run is generated in the menu's calm style")
+	assert(rotation.slice(0, main.RunScript.RUN_STYLES.size()) == main.RunScript.RUN_STYLES,
+		"the rotation cycles in order (got %s)" % [rotation])
+
 	# --- the best run persists, and beats are judged on time first
 	var original_best = Save.load_best()
 	Save.save_best(61.5, 42)
@@ -332,6 +412,16 @@ func _init():
 	main.update_music_state()
 	assert(recorder.cues.size() == 1 and recorder.cues[0] == "sanctuary",
 		"a gorged, clear snake cues sanctuary (got %s)" % [recorder.cues])
+
+	# Tear the scene down while the tree is still alive: quitting with audio in
+	# flight leaves playback objects to the audio thread and reports them as
+	# leaked, which would be a noisy signal rather than a real one.
+	main.sfx.release()
+	# The audio server retires playback objects on its own thread; give it frames
+	# while the tree is still alive, or exiting can report them as leaked.
+	await _settle(15)
+	main.queue_free()
+	await _settle(15)
 
 	print("SMOKE TEST PASSED")
 	quit()

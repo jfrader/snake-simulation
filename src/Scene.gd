@@ -7,6 +7,7 @@ const HudScript = preload("res://src/HUD.gd")
 const MusicScript = preload("res://src/MusicManager.gd")
 const RunScript = preload("res://src/Run.gd")
 const Save = preload("res://src/Save.gd")
+const SfxScript = preload("res://src/Sfx.gd")
 const SnakeScript = preload("res://src/Snake.gd")
 
 # An enemy inside this range escalates the score to combat.
@@ -29,15 +30,22 @@ var score := 0
 var lives := STARTING_LIVES
 var difficulty = null
 var best := {"time": 0.0, "score": 0}
+var run_index := 0
 # The section currently requested, so the scene only speaks on a change.
 var _last_cue := ""
+var _session_salt := 0
 
 var arena: Node2D
 var hud: CanvasLayer
 var music: Node
+var sfx: Node
 
 
 func _ready() -> void:
+	# Drawn first: children could otherwise consume global RNG draws (the sound
+	# effects synthesize noise) and silently change every run's seed.
+	_session_salt = randi() % 100000
+
 	arena = ArenaScript.new()
 	add_child(arena)
 
@@ -46,6 +54,9 @@ func _ready() -> void:
 
 	music = MusicScript.new()
 	add_child(music)
+
+	sfx = SfxScript.new()
+	add_child(sfx)
 
 	snake = SnakeScript.new()
 	snake.name = "SnakeBody"
@@ -111,6 +122,7 @@ func _apply_playfield_active() -> void:
 	for enemy in enemies:
 		if is_instance_valid(enemy):
 			enemy.set_process(active)
+	sfx.set_moving(active)
 
 
 func _hide_playfield() -> void:
@@ -160,10 +172,11 @@ func start_run() -> void:
 
 	refresh_hud()
 	music.start_run(
-		"run-%d" % randi(),
-		difficulty.style, difficulty.energy,
+		"run-%d-%d" % [run_index, _session_salt],
+		RunScript.style_for_run(run_index), difficulty.energy,
 		difficulty.complexity, difficulty.brightness, difficulty.syncopation
 	)
+	run_index += 1
 	_last_cue = ""
 	update_music_state()
 
@@ -186,6 +199,7 @@ func _process(delta: float) -> void:
 			_starve()
 		refresh_hud()
 		update_music_state()
+		sfx.update_motion(_motion())
 
 
 # The run's difficulty is recomputed every frame from time and greed, so it
@@ -246,11 +260,19 @@ func _cue(section: String) -> void:
 	music.cue(section)
 
 
+# How fast the snake is going across its actual range, 0..1. The speed bar and
+# the movement sound both want this, and both normalise it the same way.
+func _motion() -> float:
+	var floor_ratio = SnakeScript.MIN_SPEED_RATIO
+	return clampf(
+		(snake.get_speed_ratio() - floor_ratio) / maxf(0.001, 1.0 - floor_ratio), 0.0, 1.0
+	)
+
+
 # Every value and ratio the HUD shows, computed here so the HUD stays
 # presentational.
 func _readout() -> Dictionary:
-	var speed_ratio = snake.speed / snake.start_speed if snake.start_speed > 0.0 else 1.0
-	var floor_ratio = SnakeScript.MIN_SPEED_RATIO
+	var speed_ratio = snake.get_speed_ratio()
 	return {
 		"time": RunScript.format_time(elapsed),
 		"score": score,
@@ -258,7 +280,7 @@ func _readout() -> Dictionary:
 		"length": snake.get_point_count(),
 		"larder": snake.get_slowness(),
 		"speed": speed_ratio,
-		"speed_bar": (speed_ratio - floor_ratio) / maxf(0.001, 1.0 - floor_ratio),
+		"speed_bar": _motion(),
 		"starving": snake.get_point_count() <= SnakeScript.MIN_SEGMENTS + STARVING_MARGIN,
 		"best": best,
 	}
@@ -305,6 +327,7 @@ func _global_polygon(polygon_node) -> PackedVector2Array:
 
 
 func eat_food() -> void:
+	sfx.play_eat(food.score)
 	snake.grow(food.score)
 	score += food.score
 	food.respawn()
@@ -333,6 +356,7 @@ func _starve() -> void:
 
 func game_over() -> void:
 	state = State.GAME_OVER
+	sfx.play_death()
 	refresh_hud()
 
 	var improved = Save.is_better(elapsed, score, best)

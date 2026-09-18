@@ -7,6 +7,8 @@ const PROJECT_SECRET := "snake-simulation"
 const RECIPE := "adventure"
 const MENU_SEED := "snake-menu"
 const MENU_SECTION := "camp"
+# The title screen keeps the calm style; runs never use it.
+const MENU_STYLE := "folk"
 
 # Driving a run the kit's way:
 #
@@ -86,7 +88,7 @@ func start_menu() -> void:
 		return
 	player.set("arrangement", "all-phases")
 	player.set("autoplay", false)
-	_apply_traits("folk", 0.2, 0.25, 0.75, 0.3)
+	_apply_traits(MENU_STYLE, 0.2, 0.25, 0.75, 0.3)
 	is_generated = player.call("generate", MENU_SEED)
 	if not is_generated:
 		push_warning("Gamestruments: failed to generate menu music")
