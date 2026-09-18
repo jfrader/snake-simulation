@@ -4,15 +4,15 @@ const ArenaScript = preload("res://src/Arena.gd")
 const EnemyScript = preload("res://src/Enemy.gd")
 const FoodScript = preload("res://src/Food.gd")
 const HudScript = preload("res://src/HUD.gd")
-const Levels = preload("res://src/Levels.gd")
 const MusicScript = preload("res://src/MusicManager.gd")
+const RunScript = preload("res://src/Run.gd")
 const SnakeScript = preload("res://src/Snake.gd")
 
 # An enemy inside this range escalates the score to combat.
 const DANGER_RADIUS := 240.0
-const LEVEL_CLEAR_DELAY := 2.0
+const STARTING_LIVES := 3
 
-enum State { MENU, PLAYING, LEVEL_CLEAR, GAME_OVER }
+enum State { MENU, PLAYING, GAME_OVER }
 
 var state := State.MENU
 var is_paused := false
@@ -21,17 +21,15 @@ var snake: Line2D
 var food: Polygon2D
 var enemies: Array = []
 
+var elapsed := 0.0
 var score := 0
-var lives := 3
-var current_level := 1
+var lives := STARTING_LIVES
 var fruit_eaten := 0
+var difficulty = null
 
 var arena: Node2D
 var hud: CanvasLayer
 var music: Node
-
-var level_cfg = null
-var next_level_timer := 0.0
 
 
 func _ready() -> void:
@@ -60,10 +58,8 @@ func _input(event: InputEvent) -> void:
 
 	match event.keycode:
 		KEY_SPACE:
-			if state == State.MENU or state == State.GAME_OVER:
-				start_game()
-			elif state == State.LEVEL_CLEAR:
-				start_level(current_level + 1)
+			if state != State.PLAYING:
+				start_run()
 		KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT:
 			if state == State.PLAYING and not is_paused:
 				snake.steer(_direction_for_key(event.keycode))
@@ -114,48 +110,36 @@ func go_to_menu() -> void:
 	music.update_state("camp", 0.0, 0.0, false)
 
 
-func start_game() -> void:
+func start_run() -> void:
+	elapsed = 0.0
 	score = 0
-	lives = 3
-	# Only a new game resets the body; growth carries across levels.
-	snake.reset_body(arena.bounds)
-	start_level(1)
-
-
-func start_level(level_num: int) -> void:
-	current_level = level_num
+	lives = STARTING_LIVES
 	fruit_eaten = 0
+	difficulty = RunScript.get_difficulty(0.0, 0.0)
+
 	state = State.PLAYING
 	is_paused = false
 	hud.set_paused(false)
-	hud.hide_message()
+	hud.hide_overlay()
 
-	level_cfg = Levels.get_level(current_level)
-
-	snake.set_base_speed(level_cfg.base_speed)
-	snake.reposition(arena.bounds)
+	snake.set_base_speed(RunScript.BASE_SPEED)
+	snake.reset_body(arena.bounds)
 
 	food.arena_bounds = arena.bounds
 	food.respawn()
 
 	clear_enemies()
-	for i in range(level_cfg.enemy_count):
-		var enemy = EnemyScript.new()
-		enemy.arena_bounds = arena.bounds
-		enemy.speed = level_cfg.enemy_speed
-		enemy.target = snake
-		add_child(enemy)
-		enemies.append(enemy)
-		enemy.respawn_in_arena()
+	_apply_difficulty()
 
 	snake.show()
 	food.show()
 	_apply_playfield_active()
 
 	refresh_hud()
-	music.start_level(
-		level_cfg.id, level_cfg.style, level_cfg.energy,
-		level_cfg.complexity, level_cfg.brightness, level_cfg.syncopation
+	music.start_run(
+		"run-%d" % randi(),
+		difficulty.style, difficulty.energy,
+		difficulty.complexity, difficulty.brightness, difficulty.syncopation
 	)
 	update_music_state()
 
@@ -171,20 +155,43 @@ func _process(delta: float) -> void:
 		return
 
 	if state == State.PLAYING:
+		elapsed += delta
 		check_collisions()
+		_apply_difficulty()
+		if snake.tick_hunger(delta):
+			_starve()
 		refresh_hud()
 		update_music_state()
-	elif state == State.LEVEL_CLEAR:
-		next_level_timer -= delta
-		if next_level_timer <= 0.0:
-			start_level(current_level + 1)
+
+
+# The run's difficulty is recomputed every frame from time and greed, so it
+# rises smoothly instead of in level steps. Enemies are added as pressure
+# climbs and never removed: a hit slims the snake but does not call off the hunt.
+func _apply_difficulty() -> void:
+	difficulty = RunScript.get_difficulty(elapsed, snake.get_slowness())
+	while enemies.size() < difficulty.enemy_count:
+		_spawn_enemy()
+	for enemy in enemies:
+		if is_instance_valid(enemy):
+			enemy.speed = difficulty.enemy_speed
+
+
+func _spawn_enemy() -> void:
+	var enemy = EnemyScript.new()
+	enemy.arena_bounds = arena.bounds
+	enemy.speed = difficulty.enemy_speed
+	enemy.target = snake
+	add_child(enemy)
+	enemies.append(enemy)
+	enemy.respawn_in_arena()
+	enemy.set_process(not is_paused)
 
 
 func update_music_state() -> void:
-	if state != State.PLAYING:
+	if state != State.PLAYING or difficulty == null:
 		return
 
-	var discovery = minf(1.0, float(fruit_eaten) / maxf(1.0, float(level_cfg.fruit_target)))
+	var greed = snake.get_slowness()
 	var head_position = snake.points[0] if snake.points.size() > 0 else Vector2.ZERO
 
 	var nearest = INF
@@ -192,31 +199,30 @@ func update_music_state() -> void:
 		if is_instance_valid(enemy):
 			nearest = minf(nearest, enemy.global_position.distance_to(head_position))
 
-	# Home section for the level, escalated while an enemy is actually close so
-	# the score keeps its level identity instead of sitting in combat forever.
-	var phase = "dungeon" if current_level >= 6 else "explore"
-	var dynamic_threat = level_cfg.threat
+	# Home section follows pressure; an enemy on the snake takes over, and late
+	# in a run that escalates to the boss section. Gorging while clear is the
+	# sanctuary moment.
+	var phase = "dungeon" if difficulty.pressure >= RunScript.DUNGEON_PRESSURE else "explore"
+	var threat = difficulty.threat
 
-	if current_level % 5 == 0:
-		# Adventure escalates a combat request with threat >= 0.85 to the boss
-		# section; "boss" itself is not a documented area phase.
-		phase = "combat"
-		dynamic_threat = maxf(dynamic_threat, 0.9)
-	elif nearest < DANGER_RADIUS:
+	if nearest < DANGER_RADIUS:
 		phase = "combat"
 		var proximity = clampf(1.0 - nearest / DANGER_RADIUS, 0.0, 1.0)
-		dynamic_threat = minf(1.0, level_cfg.threat + proximity * 0.4)
-	elif discovery >= 0.85:
+		threat = minf(1.0, difficulty.threat * 0.5 + proximity * 0.6)
+		if difficulty.pressure >= RunScript.BOSS_PRESSURE:
+			# Adventure escalates a combat request with threat >= 0.85 to boss.
+			threat = maxf(threat, 0.9)
+	elif greed >= 0.85:
 		phase = "sanctuary"
 
-	music.update_state(phase, discovery, dynamic_threat, false)
+	music.update_state(phase, greed, threat, false)
 
 
 func refresh_hud() -> void:
-	if not level_cfg or not snake:
-		return
 	var speed_ratio = snake.speed / snake.start_speed if snake.start_speed > 0.0 else 1.0
-	hud.update_hud(score, current_level, lives, fruit_eaten, level_cfg.fruit_target, speed_ratio)
+	hud.update_hud(
+		RunScript.format_time(elapsed), score, lives, snake.get_point_count(), speed_ratio
+	)
 
 
 func check_collisions() -> void:
@@ -259,12 +265,8 @@ func eat_food() -> void:
 	snake.grow(food.score)
 	score += food.score
 	fruit_eaten += 1
+	food.respawn()
 	refresh_hud()
-
-	if fruit_eaten >= level_cfg.fruit_target:
-		level_clear()
-	else:
-		food.respawn()
 
 
 func take_damage() -> void:
@@ -276,20 +278,24 @@ func take_damage() -> void:
 		snake.take_hit(arena.bounds)
 
 
-func level_clear() -> void:
-	state = State.LEVEL_CLEAR
-	hud.show_message("LEVEL CLEAR!")
-	_hide_playfield()
-	_apply_playfield_active()
-	next_level_timer = LEVEL_CLEAR_DELAY
-	music.update_state("victory", 1.0, 0.0, true)
+# Ran out of larder: one life, and a fresh buffer to eat back up from.
+func _starve() -> void:
+	lives -= 1
+	refresh_hud()
+	if lives <= 0:
+		game_over()
+	else:
+		snake.reset_body(arena.bounds)
+		snake.set_base_speed(RunScript.BASE_SPEED)
 
 
 func game_over() -> void:
 	state = State.GAME_OVER
 	hud.show_title(
-		"GAME OVER",
-		"Score %d  ·  Level %d  ·  Press SPACE to play again" % [score, current_level]
+		"RUN OVER",
+		"Survived %s  ·  Score %d  ·  Press SPACE to go again" % [
+			RunScript.format_time(elapsed), score
+		]
 	)
 	_hide_playfield()
 	_apply_playfield_active()

@@ -34,7 +34,7 @@ func _ready() -> void:
 		push_warning("Gamestruments: project_secret was not accepted")
 
 
-func start_level(level_id: String, style_name: String, energy: float, complexity: float,
+func start_run(seed: String, style_name: String, energy: float, complexity: float,
 		brightness: float, syncopation: float) -> void:
 	if player == null:
 		return
@@ -44,9 +44,9 @@ func start_level(level_id: String, style_name: String, energy: float, complexity
 	player.set("brightness", brightness)
 	player.set("syncopation", syncopation)
 
-	is_generated = player.call("generate", level_id)
+	is_generated = player.call("generate", seed)
 	if not is_generated:
-		push_warning("Gamestruments: failed to generate music for " + level_id)
+		push_warning("Gamestruments: failed to generate music for " + seed)
 
 
 func update_state(area_phase: String, discovery: float, threat: float, quest_complete: bool) -> void:

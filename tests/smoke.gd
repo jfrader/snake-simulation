@@ -1,15 +1,15 @@
 extends SceneTree
-# End-to-end cycle test against the real scene: real _process, real polygon
-# collision, the real level timer, and the music phase mapping.
+# End-to-end test of one endless run against the real scene: real _process, real
+# polygon collision, hunger, the difficulty curve, and the music phase mapping.
 #
 #     godot --headless -s tests/smoke.gd
 
 class Recorder extends Node:
 	var states := []
-	var levels := []
+	var runs := []
 
-	func start_level(level_id, _style, _energy, _complexity, _brightness, _syncopation):
-		levels.append(level_id)
+	func start_run(seed, _style, _energy, _complexity, _brightness, _syncopation):
+		runs.append(seed)
 
 	func update_state(phase, discovery, threat, quest_complete):
 		states.append([phase, discovery, threat, quest_complete])
@@ -39,131 +39,117 @@ func _init():
 
 	# --- SPACE starts a run
 	main._input(_key(KEY_SPACE))
-	assert(main.state == main.State.PLAYING, "SPACE starts play")
-	assert(main.current_level == 1, "starts at level 1")
+	assert(main.state == main.State.PLAYING, "SPACE starts the run")
 	assert(main.lives == 3, "starts with 3 lives")
+	assert(main.elapsed == 0.0, "starts with no elapsed time")
+	assert(main.snake.get_point_count() == main.snake.START_SEGMENTS, "starts with a larder")
+	assert(main.food.visible, "fruit is on the field")
 
 	# --- real collision: park the fruit on the head, let _process detect it
 	var score_before = main.score
+	var length_before = main.snake.get_point_count()
 	main.food.position = main.snake.points[0]
 	await _settle()
 	assert(main.fruit_eaten == 1, "fruit eaten through real collision")
 	assert(main.score > score_before, "eating raises the score")
+	assert(main.snake.get_point_count() > length_before, "eating adds length")
 
-	# --- eat up to the level target
-	while main.fruit_eaten < main.level_cfg.fruit_target:
-		main.food.position = main.snake.points[0]
-		await _settle()
-	assert(main.state == main.State.LEVEL_CLEAR, "hitting the target clears the level")
+	# --- the clock only runs while playing
+	var elapsed_before = main.elapsed
+	await _settle(5)
+	assert(main.elapsed > elapsed_before, "elapsed time advances while playing")
 
-	# --- the real 2s timer advances the level
-	var waited = 0.0
-	while main.state == main.State.LEVEL_CLEAR and waited < 6.0:
-		await create_timer(0.1).timeout
-		waited += 0.1
-	assert(main.state == main.State.PLAYING, "level timer advances play")
-	assert(main.current_level == 2, "now on level 2")
-	assert(main.enemies.size() == 1, "level 2 spawns one enemy")
-
-	# --- an enemy inside its detection radius turns toward the head
-	main.snake.is_invulnerable = false
-	var hunter = main.enemies[0]
-	hunter.position = main.snake.points[0] + Vector2(140, 0)
-	await _settle()
-	var to_head = (main.snake.points[0] - hunter.position).normalized()
-	assert(hunter.direction.dot(to_head) > 0.8, "a close enemy chases the snake")
-
-	# --- real enemy collision costs a life (spawn protection is cleared first)
-	main.snake.is_invulnerable = false
-	main.enemies[0].position = main.snake.points[0]
-	await _settle()
-	assert(main.lives == 2, "enemy contact costs a life")
-	assert(main.snake.is_invulnerable, "a hit grants invulnerability")
-
-	# --- drain the rest of the lives through real collisions
-	var guard = 0
-	while main.state == main.State.PLAYING and guard < 20:
-		main.snake.is_invulnerable = false
-		if main.enemies.size() > 0:
-			main.enemies[0].position = main.snake.points[0]
-		await _settle()
-		guard += 1
-	assert(main.state == main.State.GAME_OVER, "lives exhausted reach GAME_OVER")
-	assert(guard < 20, "game over arrived without spinning")
-
-	# --- SPACE restarts
-	main._input(_key(KEY_SPACE))
-	assert(main.state == main.State.PLAYING, "SPACE restarts from game over")
-	assert(main.current_level == 1 and main.lives == 3, "restart resets the run")
-
-	# --- the twist: eating adds drag, floored so the snake always moves
-	main.start_game()
-	main.start_level(1)
+	# --- the twist: length is the single source of truth for girth and speed
 	var base_speed = main.snake.start_speed
-	var base_length = main.snake.SEGMENTS
-	assert(main.snake.get_point_count() == base_length, "a new game starts at base length")
 	assert(
-		is_equal_approx(main.snake.width, main.snake.START_WIDTH),
-		"a new game starts at base girth"
+		is_equal_approx(main.snake.width, main.snake.START_WIDTH
+			+ (main.snake.get_point_count() - main.snake.MIN_SEGMENTS) * main.snake.WIDTH_PER_SEGMENT),
+		"girth reads off length"
 	)
-
-	main.snake.grow(1)
-	assert(main.snake.speed < base_speed, "eating slows the snake")
-	assert(main.snake.get_slowness() > 0.0, "slowness is reported")
-	assert(main.snake.width > main.snake.START_WIDTH, "eating adds girth")
-
-	# length is the single source of truth for both girth and speed
-	var grown = main.snake.get_point_count()
-	var expected_width = minf(
-		main.snake.MAX_WIDTH,
-		main.snake.START_WIDTH + (grown - base_length) * main.snake.WIDTH_PER_SEGMENT
-	)
-	assert(is_equal_approx(main.snake.width, expected_width), "girth reads off length")
-
 	main.snake.grow(500)
 	assert(main.snake.get_point_count() == main.snake.LENGTH_CAP, "length is capped")
 	assert(
 		is_equal_approx(main.snake.speed, base_speed * main.snake.MIN_SPEED_RATIO),
-		"speed floors at the minimum ratio"
+		"a maxed snake is at the speed floor"
 	)
 	assert(is_equal_approx(main.snake.get_slowness(), 1.0), "a maxed snake is fully slowed")
 
-	# --- growth survives a level transition
-	var carried = main.snake.get_point_count()
-	main.start_level(2)
-	assert(main.snake.get_point_count() == carried, "growth persists across levels")
-	assert(main.snake.is_invulnerable, "a new level grants spawn protection")
+	# --- hunger: the body burns down on a timer
+	var before_hunger = main.snake.get_point_count()
+	assert(not main.snake.tick_hunger(main.snake.HUNGER_INTERVAL.x * 2.0), "hunger is not fatal when fed")
+	assert(main.snake.get_point_count() < before_hunger, "hunger burns length")
+	assert(main.snake.speed > base_speed * main.snake.MIN_SPEED_RATIO, "burning length speeds you back up")
+
+	# --- starving to the floor is fatal for the run
+	main.snake.reset_body(main.arena.bounds)
+	main.snake.set_base_speed(base_speed)
+	var guard = 0
+	while main.snake.get_point_count() > main.snake.MIN_SEGMENTS and guard < 500:
+		main.snake.tick_hunger(main.snake.HUNGER_INTERVAL.x * 2.0)
+		guard += 1
+	assert(main.snake.get_point_count() == main.snake.MIN_SEGMENTS, "burns down to the floor")
+	assert(
+		main.snake.tick_hunger(main.snake.HUNGER_INTERVAL.x * 2.0),
+		"an empty larder is reported as starving"
+	)
+
+	var lives_before = main.lives
+	main._starve()
+	assert(main.lives == lives_before - 1, "starving costs a life")
+	assert(main.state == main.State.PLAYING, "starving does not end the run while lives remain")
+	assert(
+		main.snake.get_point_count() == main.snake.START_SEGMENTS,
+		"starving refills the larder"
+	)
 
 	# --- a hit slims you, it does not wipe the run
-	main.snake.take_hit(main.arena.bounds)
-	assert(main.snake.get_point_count() < carried, "a hit slims the snake")
-	assert(main.snake.get_point_count() > main.snake.SEGMENTS, "a hit does not wipe the run")
-	assert(main.snake.speed > base_speed * main.snake.MIN_SPEED_RATIO, "slimming speeds you back up")
-
-	# --- only a new game resets the body
-	main.start_game()
-	assert(main.snake.get_point_count() == main.snake.SEGMENTS, "a new game resets the body")
-
-	# --- greed is punished: a slowed snake is hunted from farther out
-	main.start_level(2)
-	main.snake.reset_body(main.arena.bounds)
-	main.snake.set_base_speed(main.level_cfg.base_speed)
-	main.snake.is_invulnerable = false
-	var stalker = main.enemies[0]
 	main.snake.grow(30)
-	var slowness = main.snake.get_slowness()
-	assert(slowness > 0.3, "30 extra segments is meaningfully slow")
-	var reach = stalker.BASE_CHASE_RADIUS * (1.0 + slowness * stalker.DETECTION_AGGRESSION)
-	assert(reach > stalker.BASE_CHASE_RADIUS * 1.15, "slowness widens their senses")
+	var before_hit = main.snake.get_point_count()
+	main.snake.take_hit(main.arena.bounds)
+	assert(main.snake.get_point_count() < before_hit, "a hit slims the snake")
+	assert(main.snake.get_point_count() > main.snake.MIN_SEGMENTS, "a hit does not wipe the run")
 
-	# placed outside the base radius but inside the widened one
-	var spot = reach - 15.0
-	assert(spot > stalker.BASE_CHASE_RADIUS, "placed outside the base chase radius")
-	stalker.position = main.snake.points[0] + Vector2(spot, 0)
-	stalker.direction = Vector2.LEFT
+	# --- difficulty climbs with time AND with greed
+	var calm = main.RunScript.get_difficulty(0.0, 0.0)
+	var late = main.RunScript.get_difficulty(300.0, 0.0)
+	var greedy = main.RunScript.get_difficulty(0.0, 1.0)
+	assert(late.enemy_count > calm.enemy_count, "time raises the enemy count")
+	assert(late.enemy_speed > calm.enemy_speed, "time raises enemy speed")
+	assert(late.threat > calm.threat, "time raises threat")
+	assert(greedy.enemy_count > calm.enemy_count, "greed raises the enemy count")
+	assert(greedy.enemy_speed > calm.enemy_speed, "greed raises enemy speed")
+	assert(greedy.pressure > calm.pressure, "greed adds pressure")
+	assert(
+		main.RunScript.get_difficulty(0.0, 1.0).enemy_count
+			< main.RunScript.get_difficulty(300.0, 1.0).enemy_count,
+		"both drivers stack"
+	)
+
+	# --- the scene spawns enemies as pressure rises
+	main.elapsed = 240.0
+	main.snake.grow(200)
+	main._apply_difficulty()
+	assert(main.enemies.size() >= 5, "a late run fields a pack")
+	assert(main.difficulty.enemy_count <= main.RunScript.MAX_ENEMIES, "the pack is capped")
+	var expected_count = main.difficulty.enemy_count
+	main.elapsed = 0.0
+	main._apply_difficulty()
+	assert(main.enemies.size() >= expected_count, "enemies are never called off")
+
+	# --- mid-run spawns are never on top of the snake
+	var head = main.snake.points[0]
+	for spawn in range(60):
+		var enemy = main.EnemyScript.new()
+		enemy.arena_bounds = main.arena.bounds
+		enemy.target = main.snake
+		main.add_child(enemy)
+		enemy.respawn_in_arena()
+		assert(
+			enemy.position.distance_to(main.snake.points[0]) >= enemy.MIN_SPAWN_DISTANCE,
+			"a spawn gives the player room (attempt %d)" % spawn
+		)
+		enemy.queue_free()
 	await _settle()
-	var toward = (main.snake.points[0] - stalker.position).normalized()
-	assert(stalker.direction.dot(toward) > 0.8, "a slowed snake is hunted from farther out")
 
 	# --- fairness invariant: even fully bloated, the snake can outrun a hunter
 	main.snake.grow(500)
@@ -173,10 +159,34 @@ func _init():
 		var hunt_speed = enemy.speed * (1.0 + 1.0 * enemy.SPEED_AGGRESSION)
 		var capped = minf(hunt_speed, bloated_speed * enemy.MAX_HUNT_SPEED_RATIO)
 		assert(capped < bloated_speed, "a hunter never outruns a bloated snake")
-	assert(
-		bloated_speed * main.enemies[0].MAX_HUNT_SPEED_RATIO < bloated_speed,
-		"the escape margin is real"
-	)
+
+	# --- enemy contact costs a life
+	main.snake.is_invulnerable = false
+	var lives_before_contact = main.lives
+	main.enemies[0].position = main.snake.points[0]
+	await _settle()
+	assert(main.lives == lives_before_contact - 1, "enemy contact costs a life")
+	assert(main.snake.is_invulnerable, "a hit grants invulnerability")
+
+	# --- drain the rest of the lives: the run only ends at zero
+	var drain_guard = 0
+	while main.state == main.State.PLAYING and drain_guard < 20:
+		main.snake.is_invulnerable = false
+		if main.enemies.size() > 0:
+			main.enemies[0].position = main.snake.points[0]
+		await _settle()
+		drain_guard += 1
+	assert(main.state == main.State.GAME_OVER, "lives exhausted end the run")
+	assert(drain_guard < 20, "game over arrived without spinning")
+
+	# --- restart clears the run
+	var finished_time = main.elapsed
+	assert(finished_time > 0.0, "the run recorded its time")
+	main._input(_key(KEY_SPACE))
+	assert(main.state == main.State.PLAYING, "SPACE restarts")
+	assert(main.elapsed < finished_time, "restart clears the clock")
+	assert(main.lives == 3 and main.score == 0, "restart clears lives and score")
+	assert(main.snake.get_point_count() == main.snake.START_SEGMENTS, "restart resets the body")
 
 	# --- music phase mapping, driven without the addon installed
 	var recorder = Recorder.new()
@@ -184,48 +194,47 @@ func _init():
 	main.music = recorder
 	main.add_child(recorder)
 
-	main.start_level(1)
+	# A fresh run is one music generation, seeded per run.
+	main.start_run()
+	assert(main.state == main.State.PLAYING, "the run restarted through the recorder")
+	assert(recorder.runs.size() == 1, "music is generated once per run")
+	assert(not str(recorder.runs[0]).is_empty(), "the run seed is not empty")
+
+	# Home phase follows pressure. Checked with no enemies on the field, since a
+	# nearby enemy is supposed to take over.
+	main.elapsed = 0.0
+	main.snake.reset_body(main.arena.bounds)
+	main.clear_enemies()
+	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_slowness())
 	recorder.states.clear()
 	main.update_music_state()
-	assert(recorder.states[0][0] == "explore", "level 1 home phase is explore")
+	assert(recorder.states[0][0] == "explore", "an early run sits in explore")
 
-	main.start_level(2)
-	main.enemies[0].position = Vector2(-9999, -9999)
+	main.elapsed = 300.0
+	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_slowness())
 	recorder.states.clear()
 	main.update_music_state()
-	assert(recorder.states[0][0] == "explore", "a distant enemy keeps the home phase")
+	assert(recorder.states[0][0] == "dungeon", "a late run sits in dungeon")
+	assert(main.difficulty.pressure >= main.RunScript.BOSS_PRESSURE, "pressure is boss-deep")
 
+	# something on the snake takes over, and deep pressure escalates to boss
+	main._apply_difficulty()
+	assert(main.enemies.size() > 0, "a late run fields a pack")
 	main.enemies[0].position = main.snake.points[0]
 	recorder.states.clear()
 	main.update_music_state()
 	assert(recorder.states[0][0] == "combat", "a close enemy switches to combat")
-	assert(recorder.states[0][2] > 0.0, "threat tracks proximity")
+	assert(recorder.states[0][2] >= 0.85, "boss escalation carries enough threat")
 
-	main.start_level(5)
+	# gorging while clear is the sanctuary moment
+	main.elapsed = 0.0
+	main.clear_enemies()
+	main.snake.grow(500)
+	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_slowness())
 	recorder.states.clear()
 	main.update_music_state()
-	assert(recorder.states[0][0] == "combat", "the boss level requests combat")
-	assert(recorder.states[0][2] >= 0.85, "boss threat escalates the section")
+	assert(recorder.states[0][0] == "sanctuary", "a gorged, clear snake reaches sanctuary")
 
-	main.start_level(6)
-	for enemy in main.enemies:
-		enemy.position = Vector2(-9999, -9999)
-	recorder.states.clear()
-	main.update_music_state()
-	assert(recorder.states[0][0] == "dungeon", "late levels sit in dungeon")
-
-	main.fruit_eaten = main.level_cfg.fruit_target
-	recorder.states.clear()
-	main.update_music_state()
-	assert(recorder.states[0][0] == "sanctuary", "a fruit run reaches sanctuary")
-
-	recorder.states.clear()
-	main.level_clear()
-	assert(recorder.states[0][0] == "victory", "clearing requests victory")
-	assert(recorder.states[0][3] == true, "victory carries quest_complete")
-	assert(recorder.levels.has("level-6"), "the level id is passed to the music layer")
-
-	# The addon-absent no-op is covered by tests/music_stub_test.gd.
 
 	print("SMOKE TEST PASSED")
 	quit()
