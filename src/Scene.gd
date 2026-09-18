@@ -42,6 +42,10 @@ var sfx: Node
 
 
 func _ready() -> void:
+	# Drawn first: children could otherwise consume global RNG draws (the sound
+	# effects synthesize noise) and silently change every run's seed.
+	_session_salt = randi() % 100000
+
 	arena = ArenaScript.new()
 	add_child(arena)
 
@@ -62,9 +66,6 @@ func _ready() -> void:
 	add_child(food)
 
 	best = Save.load_best()
-	# Salted per launch so two sessions do not play the same scores, while the
-	# style sequence within a session stays predictable.
-	_session_salt = randi() % 100000
 	go_to_menu()
 
 
@@ -140,7 +141,7 @@ func go_to_menu() -> void:
 	_hide_playfield()
 	hud.set_play_hud_visible(false)
 	_apply_playfield_active()
-	music.start_menu(RunScript.MENU_STYLE)
+	music.start_menu()
 	_cue("camp")
 
 
@@ -198,7 +199,7 @@ func _process(delta: float) -> void:
 			_starve()
 		refresh_hud()
 		update_music_state()
-		sfx.update_motion(snake.speed / snake.start_speed if snake.start_speed > 0.0 else 1.0)
+		sfx.update_motion(_motion())
 
 
 # The run's difficulty is recomputed every frame from time and greed, so it
@@ -259,11 +260,19 @@ func _cue(section: String) -> void:
 	music.cue(section)
 
 
+# How fast the snake is going across its actual range, 0..1. The speed bar and
+# the movement sound both want this, and both normalise it the same way.
+func _motion() -> float:
+	var floor_ratio = SnakeScript.MIN_SPEED_RATIO
+	return clampf(
+		(snake.get_speed_ratio() - floor_ratio) / maxf(0.001, 1.0 - floor_ratio), 0.0, 1.0
+	)
+
+
 # Every value and ratio the HUD shows, computed here so the HUD stays
 # presentational.
 func _readout() -> Dictionary:
-	var speed_ratio = snake.speed / snake.start_speed if snake.start_speed > 0.0 else 1.0
-	var floor_ratio = SnakeScript.MIN_SPEED_RATIO
+	var speed_ratio = snake.get_speed_ratio()
 	return {
 		"time": RunScript.format_time(elapsed),
 		"score": score,
@@ -271,7 +280,7 @@ func _readout() -> Dictionary:
 		"length": snake.get_point_count(),
 		"larder": snake.get_slowness(),
 		"speed": speed_ratio,
-		"speed_bar": (speed_ratio - floor_ratio) / maxf(0.001, 1.0 - floor_ratio),
+		"speed_bar": _motion(),
 		"starving": snake.get_point_count() <= SnakeScript.MIN_SEGMENTS + STARVING_MARGIN,
 		"best": best,
 	}

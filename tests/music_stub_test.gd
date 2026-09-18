@@ -56,7 +56,7 @@ func _init():
 	root.add_child(absent)
 	await process_frame
 	assert(absent.player == null, "no player when the addon is missing")
-	absent.start_menu("folk")
+	absent.start_menu()
 	absent.start_run("run-1", "folk", 0.2, 0.2, 0.8, 0.2)
 	absent.cue("chase")
 	assert(not absent.is_generated, "nothing generated without the addon")
@@ -72,7 +72,7 @@ func _init():
 	assert(p.recipe == "adventure", "adventure recipe set")
 
 	# Menu: a single calm section, no touring form.
-	mm.start_menu("folk")
+	mm.start_menu()
 	assert(mm.is_generated, "menu music generated")
 	assert(p.autoplay == false, "the menu does not attach a touring form")
 	assert(p.style == "folk", "menu style set")

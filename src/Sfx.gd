@@ -3,17 +3,21 @@ extends Node
 # Sound effects, synthesized at startup so the game stays code-only: no new
 # assets, no network, and the shapes are tunable from here.
 #
-# The Gamestruments addon is music only, so nothing here goes through it. SFX
-# play on the Master bus; the kit's generated music prefers a `Music` bus when
-# one exists, which keeps the two separable.
+# The Gamestruments addon is music only, so nothing here goes through it. Both
+# the effects and the generated music currently land on Master, since the
+# project defines no other buses; if a `Music` bus is ever added the kit prefers
+# it automatically and will part company with the effects on its own.
 
 const MIX_RATE := 22050
+const NOISE_SEED := 0x5EED5F1E
 
 const EAT_DB := -11.0
 const DEATH_DB := -8.0
-# The movement bed has to be barely there.
-const SLITHER_DB := -30.0
-const SLITHER_DB_AT_SPEED := -22.0
+# The movement bed has to be barely there: it never rises above a whisper.
+# The caller passes motion normalised over the snake's actual speed range, so
+# the quiet end is reachable rather than theoretical.
+const SLITHER_DB := -34.0
+const SLITHER_DB_AT_SPEED := -27.0
 
 const EAT_SECONDS := 0.085
 const DEATH_SECONDS := 0.7
@@ -24,9 +28,13 @@ var death_player: AudioStreamPlayer
 var slither_player: AudioStreamPlayer
 
 var _moving := false
+# Fixed seed, and never the global RNG: Scene draws its per-launch salt from
+# that, so spending draws here would silently change every run's seed.
+var _rng := RandomNumberGenerator.new()
 
 
 func _ready() -> void:
+	_rng.seed = NOISE_SEED
 	eat_player = _make_player(_eat_stream(), EAT_DB)
 	death_player = _make_player(_death_stream(), DEATH_DB)
 	# A gentle bed while the snake moves, at a level you should have to listen for.
@@ -130,7 +138,7 @@ func _death_stream() -> AudioStreamWAV:
 		var frequency = 430.0 * (1.0 - 0.78 * progress)
 		phase += TAU * frequency / MIX_RATE
 		var envelope = exp(-t * 4.2)
-		var noise = randf() * 2.0 - 1.0
+		var noise = _rng.randf() * 2.0 - 1.0
 		samples[i] = (sin(phase) * 0.62 + noise * 0.14) * envelope * 0.5
 	return _to_wav(samples)
 
@@ -143,7 +151,7 @@ func _slither_stream() -> AudioStreamWAV:
 	var previous := 0.0
 	for i in range(count):
 		# One-pole low pass: keeps it a soft hiss instead of bright static.
-		previous = lerpf(previous, randf() * 2.0 - 1.0, 0.06)
+		previous = lerpf(previous, _rng.randf() * 2.0 - 1.0, 0.06)
 		# Slow swell so it breathes rather than drones.
 		var swell = 0.65 + 0.35 * sin(TAU * 1.5 * float(i) / MIX_RATE)
 		raw[i] = previous * swell * 0.5

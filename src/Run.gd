@@ -28,11 +28,11 @@ const TRAIT_BRIGHTNESS_FALL := 0.03
 const TRAIT_SYNCOPATION := 0.70
 const TRAIT_SYNCOPATION_CLIMB := 0.025
 
-# Styles a run may be generated in. Style is fixed at generate time and a run
-# generates once, so mapping it from pressure meant every run was `folk`; the
-# run picks one of these instead, which also makes runs sound different.
-const RUN_STYLES := ["dark", "orchestral", "orchestral", "dark", "folk"]
-const MENU_STYLE := "folk"
+# Styles a run may be generated in, cycled by run index. Style is fixed at
+# generate time and a run generates once, so mapping it from pressure meant
+# every run was the calm `folk`; runs never use `folk`, so no run is parked in
+# the calm style, and consecutive runs differ.
+const RUN_STYLES := ["dark", "orchestral"]
 
 
 class Difficulty:
@@ -40,7 +40,6 @@ class Difficulty:
 	var enemy_count := 0
 	var enemy_speed := 0.0
 	var threat := 0.0
-	var style := "folk"
 	var energy := 0.0
 	var complexity := 0.0
 	var brightness := 0.0

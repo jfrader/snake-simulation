@@ -168,6 +168,14 @@ func tick_hunger(delta: float) -> bool:
 	return false
 
 
+# Current top speed as a fraction of the run's base, which is what the HUD and
+# the movement sound both want.
+func get_speed_ratio() -> float:
+	if start_speed <= 0.0:
+		return 1.0
+	return speed / start_speed
+
+
 # How far the drag has pulled the snake below the run's base speed.
 func get_slowness() -> float:
 	var span = float(LENGTH_CAP - MIN_SEGMENTS)
