@@ -8,17 +8,25 @@ const TONGUE_INTERVAL := Vector2(1.1, 3.4)
 const TONGUE_FLICK_TIME := 0.24
 const TONGUE_REACH := 0.85
 
-# Eating is the twist: every segment adds girth and drag. The penalty is spent
-# as a fraction of the level's base speed so it is felt at every difficulty, and
-# floored so a maxed-out snake still moves.
+# Eating is the twist: every segment adds girth and drag. Girth and top speed
+# are both read off length, so a body carried across levels behaves the same at
+# every level's base speed.
 const MIN_SPEED_RATIO := 0.4
-const DRAG_PER_SEGMENT := 0.02
+const HIT_LOSS_FRACTION := 0.35
 
-const SEGMENTS := 10
+# MIN_SEGMENTS is the starving floor: eat or die. START_SEGMENTS is the larder
+# a fresh run begins with, so there is a buffer before the first meal.
+const MIN_SEGMENTS := 10
+const START_SEGMENTS := 20
+const LENGTH_CAP := 80
 const SEGMENT_SPACING := 5.0
 const START_WIDTH := 8.0
-const MAX_WIDTH := 16.0
+const WIDTH_PER_SEGMENT := 0.2
+const MAX_WIDTH := START_WIDTH + (LENGTH_CAP - MIN_SEGMENTS) * WIDTH_PER_SEGMENT
 const DOT_SIDES := 8
+
+# A bigger body burns fuel faster: seconds per segment lost, light to bloated.
+const HUNGER_INTERVAL := Vector2(4.5, 1.8)
 
 const INVULNERABILITY_TIME := 2.0
 const BLINK_INTERVAL := 0.1
@@ -48,6 +56,7 @@ var tongue_prong_right: Line2D
 var _time := 0.0
 var _blink_timer := 0.0
 var _tongue_clock := 0.0
+var _hunger_clock := 0.0
 var _tongue_next := 0.0
 
 
@@ -68,39 +77,91 @@ func steer(new_direction: Vector2) -> void:
 	direction = new_direction
 
 
-func shrink_and_respawn(bounds: Rect2) -> void:
+# A fresh run: back to the base snake. Only called when a new game starts.
+func reset_body(bounds: Rect2) -> void:
 	arena_bounds = bounds
-	var center = bounds.position + bounds.size / 2.0
+	_lay_out(START_SEGMENTS)
+	_apply_size()
 
+
+# Keep the length and girth the run has earned; just put the body back on the
+# arena centre and hand out spawn protection. Used at every level start and
+# after a hit.
+func reposition(bounds: Rect2) -> void:
+	arena_bounds = bounds
+	_lay_out(maxi(get_point_count(), MIN_SEGMENTS))
+	_apply_size()
+
+
+# A hit costs part of the growth above the base length, never the whole run.
+# Slimming down speeds the snake back up, which is the relief from being slow.
+func take_hit(bounds: Rect2) -> void:
+	var extra = maxi(0, get_point_count() - MIN_SEGMENTS)
+	var drop = mini(extra, maxi(2, int(extra * HIT_LOSS_FRACTION)))
+	for i in range(drop):
+		remove_point(get_point_count() - 1)
+	reposition(bounds)
+
+
+func set_base_speed(value: float) -> void:
+	start_speed = value
+	_apply_size()
+
+
+func _lay_out(count: int) -> void:
 	clear_points()
 	direction = Vector2.RIGHT
-	add_point(center)
-	for i in range(1, SEGMENTS):
+	var center = arena_bounds.position + arena_bounds.size / 2.0
+	for i in range(count):
 		add_point(Vector2(center.x - i * SEGMENT_SPACING, center.y))
-
-	width = START_WIDTH
 	adjust_width_curve()
-	adjust_head_collision()
 
 	is_invulnerable = true
 	current_invulnerability_timer = INVULNERABILITY_TIME
 	_blink_timer = 0.0
 
 
+# Length is the single source of truth: girth and top speed are both read from
+# it, so nothing can drift out of sync.
+func _apply_size() -> void:
+	var extra = maxi(0, get_point_count() - MIN_SEGMENTS)
+	width = minf(MAX_WIDTH, START_WIDTH + extra * WIDTH_PER_SEGMENT)
+	speed = start_speed * lerpf(1.0, MIN_SPEED_RATIO, get_slowness())
+	adjust_head_collision()
+
+
 func grow(times: int = 1) -> void:
 	for i in range(times):
+		if get_point_count() >= LENGTH_CAP:
+			break
 		_append_tail_segment()
-		_grow_width(get_point_count())
-
-	speed = maxf(start_speed * MIN_SPEED_RATIO, speed - start_speed * DRAG_PER_SEGMENT * times)
 	adjust_width_curve()
+	_apply_size()
 
 
-# How far the drag has pulled the snake below the level's base speed.
+# The snake burns length continuously. Eating is the only way to top it up, so
+# the player is pushed into the very thing that slows them down. Returns true
+# when the larder is empty and there is nothing left to burn.
+func tick_hunger(delta: float) -> bool:
+	_hunger_clock += delta
+	var interval = lerpf(HUNGER_INTERVAL.x, HUNGER_INTERVAL.y, get_slowness())
+	if _hunger_clock < interval:
+		return false
+	_hunger_clock -= interval
+	if get_point_count() <= MIN_SEGMENTS:
+		return true
+	remove_point(get_point_count() - 1)
+	adjust_width_curve()
+	_apply_size()
+	return false
+
+
+# How far the drag has pulled the snake below the run's base speed.
 func get_slowness() -> float:
-	if start_speed <= 0.0:
+	var span = float(LENGTH_CAP - MIN_SEGMENTS)
+	if span <= 0.0:
 		return 0.0
-	return clampf(1.0 - speed / start_speed, 0.0, 1.0)
+	return clampf(float(get_point_count() - MIN_SEGMENTS) / span, 0.0, 1.0)
 
 
 func _append_tail_segment() -> void:
@@ -112,12 +173,6 @@ func _append_tail_segment() -> void:
 	elif points.size() == 1:
 		add_point(points[0] - direction.normalized() * width)
 
-
-func _grow_width(amount: float) -> void:
-	if width >= MAX_WIDTH:
-		return
-	width += 0.05 * amount
-	adjust_head_collision()
 
 
 func _process(delta: float) -> void:

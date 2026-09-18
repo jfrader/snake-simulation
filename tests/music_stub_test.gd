@@ -41,7 +41,7 @@ func _init():
 	root.add_child(absent)
 	await process_frame
 	assert(absent.player == null, "no player when the addon is missing")
-	absent.start_level("level-1", "folk", 0.2, 0.2, 0.8, 0.2)
+	absent.start_run("level-1", "folk", 0.2, 0.2, 0.8, 0.2)
 	absent.update_state("explore", 0.1, 0.1, false)
 	assert(not absent.is_generated, "nothing generated without the addon")
 
@@ -54,9 +54,9 @@ func _init():
 	assert(p.project_secret == "snake-simulation", "project_secret set")
 	assert(p.recipe == "adventure", "adventure recipe set")
 
-	mm.start_level("level-4", "dark", 0.7, 0.7, 0.4, 0.6)
+	mm.start_run("run-4", "dark", 0.7, 0.7, 0.4, 0.6)
 	assert(mm.is_generated, "generate accepted")
-	assert(p.seed_used == "level-4", "level id used as seed")
+	assert(p.seed_used == "run-4", "run seed used")
 	assert(p.style == "dark", "style set")
 	assert(is_equal_approx(p.energy, 0.7), "energy set")
 	assert(is_equal_approx(p.syncopation, 0.6), "syncopation set")
@@ -67,7 +67,7 @@ func _init():
 
 	# A rejected generate must not leave stale state flowing to the engine.
 	p.allow_generate = false
-	mm.start_level("level-9", "bogus", 0.5, 0.5, 0.5, 0.5)
+	mm.start_run("run-9", "bogus", 0.5, 0.5, 0.5, 0.5)
 	assert(not mm.is_generated, "rejected generate reports false")
 	mm.update_state("combat", 0.5, 0.5, false)
 	assert(p.states.size() == 1, "no state pushed after a failed generate")
