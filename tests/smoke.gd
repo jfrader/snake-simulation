@@ -1,6 +1,16 @@
 extends SceneTree
 
 const Save = preload("res://src/Save.gd")
+# The suite plays a full run through to game over, and the game saves its record
+# on the way out. Point the whole game at a throwaway file so a test run can
+# never become the player's best.
+const TEST_SAVE := "user://snake_test_best.cfg"
+
+
+func _read_file(path: String) -> String:
+	if not FileAccess.file_exists(path):
+		return ""
+	return FileAccess.get_file_as_string(path)
 # End-to-end test of one endless run against the real scene: real _process, real
 # polygon collision, hunger, the difficulty curve, and the music phase mapping.
 #
@@ -37,7 +47,13 @@ func _settle(frames: int = 2) -> void:
 
 
 func _init():
+	# Captured before anything runs, so the end of the test can prove the real
+	# record was never touched.
+	var real_save_before = _read_file(Save.PATH)
+
 	var main = load("res://scene.tscn").instantiate()
+	# Set before _ready, so the scene loads and saves through the test path.
+	main.save_path = TEST_SAVE
 	root.add_child(main)
 	current_scene = main
 	await _settle()
@@ -86,7 +102,7 @@ func _init():
 		is_equal_approx(main.snake.speed, base_speed * main.snake.MIN_SPEED_RATIO),
 		"a maxed snake is at the speed floor"
 	)
-	assert(is_equal_approx(main.snake.get_slowness(), 1.0), "a maxed snake is fully slowed")
+	assert(is_equal_approx(main.snake.get_larder_ratio(), 1.0), "a maxed snake has a full larder")
 
 	# --- the body is a distance-constrained rope: no gaps, no inversions
 	main.start_run()
@@ -208,7 +224,7 @@ func _init():
 
 	# --- fairness invariant: even fully bloated, the snake can outrun a hunter
 	main.snake.grow(500)
-	assert(is_equal_approx(main.snake.get_slowness(), 1.0), "snake is at max bloat")
+	assert(is_equal_approx(main.snake.get_larder_ratio(), 1.0), "snake is at a full larder")
 	var bloated_speed = main.snake.speed
 	for enemy in main.enemies:
 		var hunt_speed = enemy.speed * (1.0 + 1.0 * enemy.SPEED_AGGRESSION)
@@ -233,6 +249,20 @@ func _init():
 		drain_guard += 1
 	assert(main.state == main.State.GAME_OVER, "lives exhausted end the run")
 	assert(drain_guard < 20, "game over arrived without spinning")
+
+	# --- ending the run is idempotent, and nothing keeps playing afterwards
+	var lives_at_end = main.lives
+	assert(main.enemies.is_empty(), "the field is cleared when the run ends")
+	await _settle(10)
+	assert(main.enemies.is_empty(), "no enemies appear while the run is over")
+	assert(not main.sfx.slither_player.playing, "the movement bed is stopped")
+
+	main.game_over()
+	assert(main.lives == lives_at_end, "a second game_over does not run the run down again")
+	main.take_damage()
+	assert(main.lives == lives_at_end, "damage after the run ends is ignored")
+	main._starve()
+	assert(main.lives == lives_at_end, "starving after the run ends is ignored")
 
 	# --- restart clears the run
 	var finished_time = main.elapsed
@@ -321,16 +351,14 @@ func _init():
 		"the rotation cycles in order (got %s)" % [rotation])
 
 	# --- the best run persists, and beats are judged on time first
-	var original_best = Save.load_best()
-	Save.save_best(61.5, 42)
-	var reloaded = Save.load_best()
+	Save.save_best(61.5, 42, TEST_SAVE)
+	var reloaded = Save.load_best(TEST_SAVE)
 	assert(is_equal_approx(reloaded["time"], 61.5), "best time persists")
 	assert(reloaded["score"] == 42, "best score persists")
 	assert(Save.is_better(62.0, 0, reloaded), "a longer run beats the record")
 	assert(not Save.is_better(61.5, 41, reloaded), "a shorter, lower-scoring run does not")
 	assert(Save.is_better(61.5, 43, reloaded), "equal time with more score beats the record")
 	assert(Save.format_best(reloaded).contains("1:01"), "the best line formats the time")
-	Save.save_best(original_best["time"], original_best["score"])
 
 	# --- music phase mapping, driven without the addon installed
 	var recorder = Recorder.new()
@@ -348,7 +376,7 @@ func _init():
 	main.elapsed = 0.0
 	main.snake.reset_body(main.arena.bounds)
 	main.clear_enemies()
-	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_slowness())
+	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_larder_ratio())
 	recorder.cues.clear()
 	for i in range(30):
 		main.update_music_state()
@@ -357,7 +385,7 @@ func _init():
 
 	# distant enemies are not an event
 	main.elapsed = 120.0
-	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_slowness())
+	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_larder_ratio())
 	main._apply_difficulty()
 	assert(main.enemies.size() > 0, "a mid run fields enemies")
 	for enemy in main.enemies:
@@ -392,7 +420,7 @@ func _init():
 
 	# deep pressure while engaged escalates to boss
 	main.elapsed = 400.0
-	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_slowness())
+	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_larder_ratio())
 	main.enemies[0].position = Vector2(-9999, -9999)
 	main.update_music_state()   # clears the cue so the next one can fire
 	main.enemies[0].position = main.snake.points[0]
@@ -406,7 +434,7 @@ func _init():
 	main.elapsed = 0.0
 	main.clear_enemies()
 	main.snake.grow(500)
-	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_slowness())
+	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_larder_ratio())
 	main.enemies.clear()
 	recorder.cues.clear()
 	main.update_music_state()
@@ -422,6 +450,14 @@ func _init():
 	await _settle(15)
 	main.queue_free()
 	await _settle(15)
+
+	# --- the suite must never write its own run into the player's record
+	assert(
+		_read_file(Save.PATH) == real_save_before,
+		"the suite leaves the player's real save untouched"
+	)
+	assert(FileAccess.file_exists(TEST_SAVE), "the run's record went to the test path")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(TEST_SAVE))
 
 	print("SMOKE TEST PASSED")
 	quit()

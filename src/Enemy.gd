@@ -1,7 +1,7 @@
 extends Polygon2D
 
-# Greed is punished: the slower the snake gets from eating, the wider these
-# senses reach and the harder they hunt. Detection widens fully; raw speed is
+# Greed is punished: the fuller the snake's larder, the slower it moves, and
+# the wider these senses reach and the harder they hunt. Detection widens fully; raw speed is
 # throttled, and can never reach the snake's own speed, or a fully bloated
 # player would be outrun and killed with no counterplay.
 const BASE_CHASE_RADIUS := 200.0
@@ -74,15 +74,15 @@ func respawn_in_arena() -> void:
 func _process(delta: float) -> void:
 	_patrol(delta)
 
-	var slowness = target.get_slowness() if target else 0.0
+	var larder = target.get_larder_ratio() if target else 0.0
 
 	if target and target.visible and not target.is_invulnerable and target.points.size() > 0:
 		var head_position = target.points[0]
-		var detection = BASE_CHASE_RADIUS * (1.0 + slowness * DETECTION_AGGRESSION)
+		var detection = BASE_CHASE_RADIUS * (1.0 + larder * DETECTION_AGGRESSION)
 		if global_position.distance_to(head_position) < detection:
 			direction = (head_position - global_position).normalized()
 
-	var hunt_speed = speed * (1.0 + slowness * SPEED_AGGRESSION)
+	var hunt_speed = speed * (1.0 + larder * SPEED_AGGRESSION)
 	if target:
 		# Always leave the snake an escape, however bloated it gets.
 		hunt_speed = minf(hunt_speed, target.speed * MAX_HUNT_SPEED_RATIO)

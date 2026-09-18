@@ -9,8 +9,7 @@ const TONGUE_FLICK_TIME := 0.24
 const TONGUE_REACH := 0.85
 
 # Eating is the twist: every segment adds girth and drag. Girth and top speed
-# are both read off length, so a body carried across levels behaves the same at
-# every level's base speed.
+# are both read off length, so the body behaves the same at any base speed.
 const MIN_SPEED_RATIO := 0.4
 const HIT_LOSS_FRACTION := 0.35
 
@@ -93,7 +92,7 @@ func reset_body(bounds: Rect2) -> void:
 
 
 # Keep the length and girth the run has earned; just put the body back on the
-# arena centre and hand out spawn protection. Used at every level start and
+# arena centre and hand out spawn protection. Used at the start of a run and
 # after a hit.
 func reposition(bounds: Rect2) -> void:
 	arena_bounds = bounds
@@ -136,7 +135,7 @@ func _lay_out(count: int) -> void:
 func _apply_size() -> void:
 	var extra = maxi(0, _chain.size() - MIN_SEGMENTS)
 	width = minf(MAX_WIDTH, START_WIDTH + extra * WIDTH_PER_SEGMENT)
-	speed = start_speed * lerpf(1.0, MIN_SPEED_RATIO, get_slowness())
+	speed = start_speed * lerpf(1.0, MIN_SPEED_RATIO, get_larder_ratio())
 	adjust_head_collision()
 
 
@@ -155,7 +154,7 @@ func grow(times: int = 1) -> void:
 # when the larder is empty and there is nothing left to burn.
 func tick_hunger(delta: float) -> bool:
 	_hunger_clock += delta
-	var interval = lerpf(HUNGER_INTERVAL.x, HUNGER_INTERVAL.y, get_slowness())
+	var interval = lerpf(HUNGER_INTERVAL.x, HUNGER_INTERVAL.y, get_larder_ratio())
 	if _hunger_clock < interval:
 		return false
 	_hunger_clock -= interval
@@ -176,8 +175,11 @@ func get_speed_ratio() -> float:
 	return speed / start_speed
 
 
-# How far the drag has pulled the snake below the run's base speed.
-func get_slowness() -> float:
+# How full the body is between the starving floor and the cap. This one quantity
+# is both the larder and the drag, which is the whole trade: the fuller you are,
+# the longer you last and the slower you move. Everything that reads it — the
+# HUD bar, enemy aggression, the music's greed input — means the same thing.
+func get_larder_ratio() -> float:
 	var span = float(LENGTH_CAP - MIN_SEGMENTS)
 	if span <= 0.0:
 		return 0.0
