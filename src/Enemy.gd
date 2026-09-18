@@ -1,9 +1,13 @@
 extends Polygon2D
 
 # Greed is punished: the slower the snake gets from eating, the wider these
-# senses reach and the harder they hunt.
+# senses reach and the harder they hunt. Detection widens fully; raw speed is
+# throttled, and can never reach the snake's own speed, or a fully bloated
+# player would be outrun and killed with no counterplay.
 const BASE_CHASE_RADIUS := 200.0
-const AGGRESSION := 0.6
+const DETECTION_AGGRESSION := 0.6
+const SPEED_AGGRESSION := 0.15
+const MAX_HUNT_SPEED_RATIO := 0.9
 const PATROL_TURN := PI / 4.0
 const PATROL_INTERVAL := Vector2(1.0, 3.0)
 const RADIUS := 10.0
@@ -58,15 +62,20 @@ func respawn_in_arena() -> void:
 func _process(delta: float) -> void:
 	_patrol(delta)
 
-	var hunt = 1.0
-	if target:
-		hunt = 1.0 + target.get_slowness() * AGGRESSION
-		if target.visible and not target.is_invulnerable and target.points.size() > 0:
-			var head_position = target.points[0]
-			if global_position.distance_to(head_position) < BASE_CHASE_RADIUS * hunt:
-				direction = (head_position - global_position).normalized()
+	var slowness = target.get_slowness() if target else 0.0
 
-	position += direction * speed * hunt * delta
+	if target and target.visible and not target.is_invulnerable and target.points.size() > 0:
+		var head_position = target.points[0]
+		var detection = BASE_CHASE_RADIUS * (1.0 + slowness * DETECTION_AGGRESSION)
+		if global_position.distance_to(head_position) < detection:
+			direction = (head_position - global_position).normalized()
+
+	var hunt_speed = speed * (1.0 + slowness * SPEED_AGGRESSION)
+	if target:
+		# Always leave the snake an escape, however bloated it gets.
+		hunt_speed = minf(hunt_speed, target.speed * MAX_HUNT_SPEED_RATIO)
+
+	position += direction * hunt_speed * delta
 	_bounce_off_arena()
 
 

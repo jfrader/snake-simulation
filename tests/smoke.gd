@@ -97,31 +97,86 @@ func _init():
 	assert(main.current_level == 1 and main.lives == 3, "restart resets the run")
 
 	# --- the twist: eating adds drag, floored so the snake always moves
+	main.start_game()
 	main.start_level(1)
 	var base_speed = main.snake.start_speed
-	main.snake.speed = base_speed
+	var base_length = main.snake.SEGMENTS
+	assert(main.snake.get_point_count() == base_length, "a new game starts at base length")
+	assert(
+		is_equal_approx(main.snake.width, main.snake.START_WIDTH),
+		"a new game starts at base girth"
+	)
+
 	main.snake.grow(1)
 	assert(main.snake.speed < base_speed, "eating slows the snake")
 	assert(main.snake.get_slowness() > 0.0, "slowness is reported")
-	main.snake.grow(100)
+	assert(main.snake.width > main.snake.START_WIDTH, "eating adds girth")
+
+	# length is the single source of truth for both girth and speed
+	var grown = main.snake.get_point_count()
+	var expected_width = minf(
+		main.snake.MAX_WIDTH,
+		main.snake.START_WIDTH + (grown - base_length) * main.snake.WIDTH_PER_SEGMENT
+	)
+	assert(is_equal_approx(main.snake.width, expected_width), "girth reads off length")
+
+	main.snake.grow(500)
+	assert(main.snake.get_point_count() == main.snake.LENGTH_CAP, "length is capped")
 	assert(
 		is_equal_approx(main.snake.speed, base_speed * main.snake.MIN_SPEED_RATIO),
 		"speed floors at the minimum ratio"
 	)
+	assert(is_equal_approx(main.snake.get_slowness(), 1.0), "a maxed snake is fully slowed")
+
+	# --- growth survives a level transition
+	var carried = main.snake.get_point_count()
+	main.start_level(2)
+	assert(main.snake.get_point_count() == carried, "growth persists across levels")
+	assert(main.snake.is_invulnerable, "a new level grants spawn protection")
+
+	# --- a hit slims you, it does not wipe the run
+	main.snake.take_hit(main.arena.bounds)
+	assert(main.snake.get_point_count() < carried, "a hit slims the snake")
+	assert(main.snake.get_point_count() > main.snake.SEGMENTS, "a hit does not wipe the run")
+	assert(main.snake.speed > base_speed * main.snake.MIN_SPEED_RATIO, "slimming speeds you back up")
+
+	# --- only a new game resets the body
+	main.start_game()
+	assert(main.snake.get_point_count() == main.snake.SEGMENTS, "a new game resets the body")
 
 	# --- greed is punished: a slowed snake is hunted from farther out
 	main.start_level(2)
+	main.snake.reset_body(main.arena.bounds)
+	main.snake.set_base_speed(main.level_cfg.base_speed)
 	main.snake.is_invulnerable = false
 	var stalker = main.enemies[0]
-	main.snake.grow(15)
-	var hunt = 1.0 + main.snake.get_slowness() * stalker.AGGRESSION
-	assert(hunt > 1.1, "slowness raises enemy aggression")
-	stalker.position = main.snake.points[0] + Vector2(220, 0)
-	assert(220.0 > stalker.BASE_CHASE_RADIUS, "placed outside the base chase radius")
-	assert(220.0 < stalker.BASE_CHASE_RADIUS * hunt, "but inside the widened radius")
+	main.snake.grow(30)
+	var slowness = main.snake.get_slowness()
+	assert(slowness > 0.3, "30 extra segments is meaningfully slow")
+	var reach = stalker.BASE_CHASE_RADIUS * (1.0 + slowness * stalker.DETECTION_AGGRESSION)
+	assert(reach > stalker.BASE_CHASE_RADIUS * 1.15, "slowness widens their senses")
+
+	# placed outside the base radius but inside the widened one
+	var spot = reach - 15.0
+	assert(spot > stalker.BASE_CHASE_RADIUS, "placed outside the base chase radius")
+	stalker.position = main.snake.points[0] + Vector2(spot, 0)
+	stalker.direction = Vector2.LEFT
 	await _settle()
 	var toward = (main.snake.points[0] - stalker.position).normalized()
 	assert(stalker.direction.dot(toward) > 0.8, "a slowed snake is hunted from farther out")
+
+	# --- fairness invariant: even fully bloated, the snake can outrun a hunter
+	main.snake.grow(500)
+	assert(is_equal_approx(main.snake.get_slowness(), 1.0), "snake is at max bloat")
+	var bloated_speed = main.snake.speed
+	for enemy in main.enemies:
+		var hunt_speed = enemy.speed * (1.0 + 1.0 * enemy.SPEED_AGGRESSION)
+		var capped = minf(hunt_speed, bloated_speed * enemy.MAX_HUNT_SPEED_RATIO)
+		assert(capped < bloated_speed, "a hunter never outruns a bloated snake")
+	assert(
+		bloated_speed * main.enemies[0].MAX_HUNT_SPEED_RATIO < bloated_speed,
+		"the escape margin is real"
+	)
 
 	# --- music phase mapping, driven without the addon installed
 	var recorder = Recorder.new()

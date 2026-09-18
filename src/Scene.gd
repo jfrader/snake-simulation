@@ -117,6 +117,8 @@ func go_to_menu() -> void:
 func start_game() -> void:
 	score = 0
 	lives = 3
+	# Only a new game resets the body; growth carries across levels.
+	snake.reset_body(arena.bounds)
 	start_level(1)
 
 
@@ -130,9 +132,8 @@ func start_level(level_num: int) -> void:
 
 	level_cfg = Levels.get_level(current_level)
 
-	snake.start_speed = level_cfg.base_speed
-	snake.speed = level_cfg.base_speed
-	snake.shrink_and_respawn(arena.bounds)
+	snake.set_base_speed(level_cfg.base_speed)
+	snake.reposition(arena.bounds)
 
 	food.arena_bounds = arena.bounds
 	food.respawn()
@@ -272,7 +273,7 @@ func take_damage() -> void:
 	if lives <= 0:
 		game_over()
 	else:
-		snake.shrink_and_respawn(arena.bounds)
+		snake.take_hit(arena.bounds)
 
 
 func level_clear() -> void:
