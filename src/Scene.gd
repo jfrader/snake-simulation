@@ -7,6 +7,7 @@ const HudScript = preload("res://src/HUD.gd")
 const MusicScript = preload("res://src/MusicManager.gd")
 const RunScript = preload("res://src/Run.gd")
 const Save = preload("res://src/Save.gd")
+const SfxScript = preload("res://src/Sfx.gd")
 const SnakeScript = preload("res://src/Snake.gd")
 
 # An enemy inside this range escalates the score to combat.
@@ -29,12 +30,15 @@ var score := 0
 var lives := STARTING_LIVES
 var difficulty = null
 var best := {"time": 0.0, "score": 0}
+var run_index := 0
 # The section currently requested, so the scene only speaks on a change.
 var _last_cue := ""
+var _session_salt := 0
 
 var arena: Node2D
 var hud: CanvasLayer
 var music: Node
+var sfx: Node
 
 
 func _ready() -> void:
@@ -47,6 +51,9 @@ func _ready() -> void:
 	music = MusicScript.new()
 	add_child(music)
 
+	sfx = SfxScript.new()
+	add_child(sfx)
+
 	snake = SnakeScript.new()
 	snake.name = "SnakeBody"
 	add_child(snake)
@@ -55,6 +62,9 @@ func _ready() -> void:
 	add_child(food)
 
 	best = Save.load_best()
+	# Salted per launch so two sessions do not play the same scores, while the
+	# style sequence within a session stays predictable.
+	_session_salt = randi() % 100000
 	go_to_menu()
 
 
@@ -111,6 +121,7 @@ func _apply_playfield_active() -> void:
 	for enemy in enemies:
 		if is_instance_valid(enemy):
 			enemy.set_process(active)
+	sfx.set_moving(active)
 
 
 func _hide_playfield() -> void:
@@ -129,7 +140,7 @@ func go_to_menu() -> void:
 	_hide_playfield()
 	hud.set_play_hud_visible(false)
 	_apply_playfield_active()
-	music.start_menu()
+	music.start_menu(RunScript.MENU_STYLE)
 	_cue("camp")
 
 
@@ -160,10 +171,11 @@ func start_run() -> void:
 
 	refresh_hud()
 	music.start_run(
-		"run-%d" % randi(),
-		difficulty.style, difficulty.energy,
+		"run-%d-%d" % [run_index, _session_salt],
+		RunScript.style_for_run(run_index), difficulty.energy,
 		difficulty.complexity, difficulty.brightness, difficulty.syncopation
 	)
+	run_index += 1
 	_last_cue = ""
 	update_music_state()
 
@@ -186,6 +198,7 @@ func _process(delta: float) -> void:
 			_starve()
 		refresh_hud()
 		update_music_state()
+		sfx.update_motion(snake.speed / snake.start_speed if snake.start_speed > 0.0 else 1.0)
 
 
 # The run's difficulty is recomputed every frame from time and greed, so it
@@ -305,6 +318,7 @@ func _global_polygon(polygon_node) -> PackedVector2Array:
 
 
 func eat_food() -> void:
+	sfx.play_eat(food.score)
 	snake.grow(food.score)
 	score += food.score
 	food.respawn()
@@ -333,6 +347,7 @@ func _starve() -> void:
 
 func game_over() -> void:
 	state = State.GAME_OVER
+	sfx.play_death()
 	refresh_hud()
 
 	var improved = Save.is_better(elapsed, score, best)

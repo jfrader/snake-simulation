@@ -81,12 +81,12 @@ func _apply_traits(style_name: String, energy: float, complexity: float,
 
 
 # The title screen is one calm section, no form.
-func start_menu() -> void:
+func start_menu(style_name: String) -> void:
 	if player == null:
 		return
 	player.set("arrangement", "all-phases")
 	player.set("autoplay", false)
-	_apply_traits("folk", 0.2, 0.25, 0.75, 0.3)
+	_apply_traits(style_name, 0.3, 0.3, 0.8, 0.35)
 	is_generated = player.call("generate", MENU_SEED)
 	if not is_generated:
 		push_warning("Gamestruments: failed to generate menu music")

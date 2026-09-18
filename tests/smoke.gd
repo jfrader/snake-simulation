@@ -10,6 +10,9 @@ class Recorder extends Node:
 	var cues := []
 	var runs := []
 
+	func start_menu(_style):
+		pass
+
 	func start_run(seed, _style, _energy, _complexity, _brightness, _syncopation):
 		runs.append(seed)
 
@@ -240,6 +243,45 @@ func _init():
 	assert(main.lives == 3 and main.score == 0, "restart clears lives and score")
 	assert(main.snake.get_point_count() == main.snake.START_SEGMENTS, "restart resets the body")
 
+	# --- sound effects are synthesized with real data
+	assert(main.sfx.eat_player.stream.data.size() > 0, "eat blip has samples")
+	assert(main.sfx.death_player.stream.data.size() > 0, "death sweep has samples")
+	var slither = main.sfx.slither_player.stream
+	assert(slither.data.size() > 0, "movement bed has samples")
+	assert(slither.loop_mode == AudioStreamWAV.LOOP_FORWARD, "movement bed loops")
+	assert(slither.loop_end == slither.data.size() / 2, "loop end matches the data")
+	assert(slither.loop_end > slither.loop_begin, "loop region is valid")
+
+	# the bed follows the playfield being live
+	main.go_to_menu()
+	assert(not main.sfx.slither_player.playing, "the bed is silent in the menu")
+	main.start_run()
+	await _settle()
+	assert(main.sfx.slither_player.playing, "the bed runs during play")
+	main.set_paused(true)
+	assert(not main.sfx.slither_player.playing, "the bed stops on pause")
+	main.set_paused(false)
+	assert(main.sfx.slither_player.playing, "the bed resumes")
+
+	# eating and dying actually fire their sounds
+	main.food.position = main.snake.points[0]
+	await _settle()
+	assert(main.sfx.eat_player.playing, "eating plays a sound")
+	main.set_paused(true)   # keep the bed out of the way for the death check
+	main.sfx.play_death()
+	assert(main.sfx.death_player.playing, "dying plays a sound")
+	main.set_paused(false)
+
+	# --- the music is not fed a near-zero, always-the-same palette
+	var opening = main.RunScript.get_difficulty(0.0, 0.0)
+	assert(opening.energy > 0.5, "a run does not open at near-zero energy")
+	assert(opening.syncopation > 0.6, "a run does not open at near-zero motion")
+	assert(opening.energy >= 0.62 - 0.001, "energy opens at the kit's own default")
+	var styles = {}
+	for i in range(10):
+		styles[main.RunScript.style_for_run(i)] = true
+	assert(styles.size() > 1, "runs are not all generated in one style")
+
 	# --- the best run persists, and beats are judged on time first
 	var original_best = Save.load_best()
 	Save.save_best(61.5, 42)
@@ -332,6 +374,13 @@ func _init():
 	main.update_music_state()
 	assert(recorder.cues.size() == 1 and recorder.cues[0] == "sanctuary",
 		"a gorged, clear snake cues sanctuary (got %s)" % [recorder.cues])
+
+	# Tear the scene down while the tree is still alive: quitting with audio in
+	# flight leaves playback objects to the audio thread and reports them as
+	# leaked, which would be a noisy signal rather than a real one.
+	main.sfx.release()
+	main.queue_free()
+	await _settle(5)
 
 	print("SMOKE TEST PASSED")
 	quit()

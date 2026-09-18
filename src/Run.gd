@@ -15,9 +15,24 @@ const MAX_ENEMY_SPEED := 300.0
 const THREAT_PRESSURE := 10.0
 
 # Music thresholds, read by the scene so the numbers live in one place.
-const DARK_PRESSURE := 3.0
-const DUNGEON_PRESSURE := 5.0
 const BOSS_PRESSURE := 12.0
+
+# Trait baselines. They begin at the kit's own defaults rather than near zero,
+# so a fresh run already has some life in it, and climb with pressure.
+const TRAIT_ENERGY := 0.62
+const TRAIT_ENERGY_CLIMB := 0.035
+const TRAIT_COMPLEXITY := 0.60
+const TRAIT_COMPLEXITY_CLIMB := 0.03
+const TRAIT_BRIGHTNESS := 0.52
+const TRAIT_BRIGHTNESS_FALL := 0.03
+const TRAIT_SYNCOPATION := 0.70
+const TRAIT_SYNCOPATION_CLIMB := 0.025
+
+# Styles a run may be generated in. Style is fixed at generate time and a run
+# generates once, so mapping it from pressure meant every run was `folk`; the
+# run picks one of these instead, which also makes runs sound different.
+const RUN_STYLES := ["dark", "orchestral", "orchestral", "dark", "folk"]
+const MENU_STYLE := "folk"
 
 
 class Difficulty:
@@ -42,19 +57,21 @@ static func get_difficulty(elapsed: float, greed: float) -> Difficulty:
 		BASE_ENEMY_SPEED, MAX_ENEMY_SPEED
 	)
 	difficulty.threat = clampf(pressure / THREAT_PRESSURE, 0.0, 1.0)
-	difficulty.style = style_for(pressure)
-	# Adventure reads these as danger / mystery / wonder / motion.
-	difficulty.energy = clampf(0.2 + pressure * 0.07, 0.0, 1.0)
-	difficulty.complexity = clampf(0.2 + pressure * 0.06, 0.0, 1.0)
-	difficulty.brightness = clampf(0.8 - pressure * 0.06, 0.0, 1.0)
-	difficulty.syncopation = clampf(0.2 + pressure * 0.07, 0.0, 1.0)
+	# Adventure reads these as danger / mystery / wonder / motion. They start at
+	# the kit's own defaults (energy 0.62, complexity 0.60, brightness 0.52,
+	# syncopation 0.70) and climb from there; the earlier 0.2 baseline fed the
+	# composer about a third of its intended energy, which is what made it dull.
+	difficulty.energy = clampf(TRAIT_ENERGY + pressure * TRAIT_ENERGY_CLIMB, 0.0, 1.0)
+	difficulty.complexity = clampf(TRAIT_COMPLEXITY + pressure * TRAIT_COMPLEXITY_CLIMB, 0.0, 1.0)
+	difficulty.brightness = clampf(TRAIT_BRIGHTNESS - pressure * TRAIT_BRIGHTNESS_FALL, 0.0, 1.0)
+	difficulty.syncopation = clampf(TRAIT_SYNCOPATION + pressure * TRAIT_SYNCOPATION_CLIMB, 0.0, 1.0)
 	return difficulty
 
 
-static func style_for(pressure: float) -> String:
-	if pressure < DARK_PRESSURE:
-		return "folk"
-	return "dark" if pressure < DUNGEON_PRESSURE else "orchestral"
+# The style a run is generated in. Deterministic per run index so a re-roll is
+# a real re-roll, and deliberately avoids parking every run in the calm one.
+static func style_for_run(run_index: int) -> String:
+	return RUN_STYLES[posmod(run_index, RUN_STYLES.size())]
 
 
 static func format_time(seconds: float) -> String:
