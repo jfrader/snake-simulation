@@ -6,11 +6,14 @@ const FoodScript = preload("res://src/Food.gd")
 const HudScript = preload("res://src/HUD.gd")
 const MusicScript = preload("res://src/MusicManager.gd")
 const RunScript = preload("res://src/Run.gd")
+const Save = preload("res://src/Save.gd")
 const SnakeScript = preload("res://src/Snake.gd")
 
 # An enemy inside this range escalates the score to combat.
 const DANGER_RADIUS := 240.0
 const STARTING_LIVES := 3
+# How close to the floor counts as starving, for the HUD warning.
+const STARVING_MARGIN := 4
 
 enum State { MENU, PLAYING, GAME_OVER }
 
@@ -26,6 +29,7 @@ var score := 0
 var lives := STARTING_LIVES
 var fruit_eaten := 0
 var difficulty = null
+var best := {"time": 0.0, "score": 0}
 
 var arena: Node2D
 var hud: CanvasLayer
@@ -49,6 +53,7 @@ func _ready() -> void:
 	food = FoodScript.new()
 	add_child(food)
 
+	best = Save.load_best()
 	go_to_menu()
 
 
@@ -63,9 +68,14 @@ func _input(event: InputEvent) -> void:
 		KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT:
 			if state == State.PLAYING and not is_paused:
 				snake.steer(_direction_for_key(event.keycode))
-		KEY_P, KEY_ESCAPE:
+		KEY_P:
 			if state == State.PLAYING:
 				set_paused(not is_paused)
+		KEY_ESCAPE:
+			if state == State.PLAYING:
+				set_paused(not is_paused)
+			else:
+				get_tree().quit()
 
 
 func _direction_for_key(keycode: int) -> Vector2:
@@ -82,8 +92,14 @@ func _direction_for_key(keycode: int) -> Vector2:
 
 func set_paused(paused: bool) -> void:
 	is_paused = paused
-	hud.set_paused(paused)
+	hud.set_paused(paused, _pause_detail())
 	_apply_playfield_active()
+
+
+func _pause_detail() -> String:
+	return "Time %s  ·  Score %d  ·  Length %d" % [
+		RunScript.format_time(elapsed), score, snake.get_point_count()
+	]
 
 
 # Gameplay nodes only run while the playfield is live, so they never have to
@@ -104,9 +120,15 @@ func _hide_playfield() -> void:
 
 func go_to_menu() -> void:
 	state = State.MENU
-	hud.show_title("SNAKE SIMULATION", "Press SPACE to start  ·  Arrows steer  ·  P pauses")
+	hud.show_title(
+		"SNAKE SIMULATION",
+		"BEST  " + Save.format_best(best),
+		"SPACE to start   ·   Arrows steer   ·   P pause   ·   ESC quit"
+	)
 	_hide_playfield()
+	hud.set_play_hud_visible(false)
 	_apply_playfield_active()
+	music.start_menu()
 	music.update_state("camp", 0.0, 0.0, false)
 
 
@@ -133,6 +155,7 @@ func start_run() -> void:
 
 	snake.show()
 	food.show()
+	hud.set_play_hud_visible(true)
 	_apply_playfield_active()
 
 	refresh_hud()
@@ -218,11 +241,26 @@ func update_music_state() -> void:
 	music.update_state(phase, greed, threat, false)
 
 
-func refresh_hud() -> void:
+# Every value and ratio the HUD shows, computed here so the HUD stays
+# presentational.
+func _readout() -> Dictionary:
 	var speed_ratio = snake.speed / snake.start_speed if snake.start_speed > 0.0 else 1.0
-	hud.update_hud(
-		RunScript.format_time(elapsed), score, lives, snake.get_point_count(), speed_ratio
-	)
+	var floor_ratio = SnakeScript.MIN_SPEED_RATIO
+	return {
+		"time": RunScript.format_time(elapsed),
+		"score": score,
+		"lives": lives,
+		"length": snake.get_point_count(),
+		"larder": snake.get_slowness(),
+		"speed": speed_ratio,
+		"speed_bar": (speed_ratio - floor_ratio) / maxf(0.001, 1.0 - floor_ratio),
+		"starving": snake.get_point_count() <= SnakeScript.MIN_SEGMENTS + STARVING_MARGIN,
+		"best": best,
+	}
+
+
+func refresh_hud() -> void:
+	hud.update_hud(_readout())
 
 
 func check_collisions() -> void:
@@ -291,11 +329,17 @@ func _starve() -> void:
 
 func game_over() -> void:
 	state = State.GAME_OVER
+	refresh_hud()
+
+	var improved = Save.is_better(elapsed, score, best)
+	if improved:
+		best = {"time": elapsed, "score": score}
+		Save.save_best(elapsed, score)
+
 	hud.show_title(
-		"RUN OVER",
-		"Survived %s  ·  Score %d  ·  Press SPACE to go again" % [
-			RunScript.format_time(elapsed), score
-		]
+		"NEW BEST" if improved else "RUN OVER",
+		"Survived %s  ·  Score %d" % [RunScript.format_time(elapsed), score],
+		"BEST  %s   ·   SPACE to go again   ·   ESC to quit" % Save.format_best(best)
 	)
 	_hide_playfield()
 	_apply_playfield_active()

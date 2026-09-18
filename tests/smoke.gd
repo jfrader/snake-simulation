@@ -1,4 +1,6 @@
 extends SceneTree
+
+const Save = preload("res://src/Save.gd")
 # End-to-end test of one endless run against the real scene: real _process, real
 # polygon collision, hunger, the difficulty curve, and the music phase mapping.
 #
@@ -37,6 +39,11 @@ func _init():
 	assert(main.state == main.State.MENU, "boots to MENU")
 	assert(not main.snake.visible, "snake hidden in the menu")
 
+	# --- the addon ships with the repo; if the extension loaded, music must wire
+	if ClassDB.class_exists("GamestrumentsPlayer"):
+		assert(main.music.player != null, "music wired to the vendored addon")
+		assert(main.music.is_generated, "menu music generated")
+
 	# --- SPACE starts a run
 	main._input(_key(KEY_SPACE))
 	assert(main.state == main.State.PLAYING, "SPACE starts the run")
@@ -73,6 +80,47 @@ func _init():
 		"a maxed snake is at the speed floor"
 	)
 	assert(is_equal_approx(main.snake.get_slowness(), 1.0), "a maxed snake is fully slowed")
+
+	# --- the body is a distance-constrained rope: no gaps, no inversions
+	main.start_run()
+	main.snake.grow(20)
+	await _settle(30)
+	var chain = main.snake.points
+	assert(chain.size() > 20, "the rope has the grown length")
+	# The solved chain is exact: that is what makes the motion stable.
+	main.snake._solve_body()
+	var solved = main.snake._chain
+	var worst = 0.0
+	for i in range(1, solved.size()):
+		worst = maxf(worst, absf(solved[i].distance_to(solved[i - 1]) - main.snake.LINK_LENGTH))
+	assert(worst < 0.01, "the solved chain holds its links exactly (worst %.4f)" % worst)
+
+	# The drawn line adds the wave on top, so it may sit slightly off nominal but
+	# must never gap or collapse.
+	var shortest = INF
+	var longest = 0.0
+	for i in range(1, chain.size()):
+		var link = chain[i].distance_to(chain[i - 1])
+		shortest = minf(shortest, link)
+		longest = maxf(longest, link)
+	var slack = main.snake.width * main.snake.WAVE_AMPLITUDE_RATIO * 2.0 + 0.2
+	assert(shortest > main.snake.LINK_LENGTH - slack, "no drawn link collapses (%.3f)" % shortest)
+	assert(longest < main.snake.LINK_LENGTH + slack, "no drawn link stretches (%.3f)" % longest)
+
+	var centroid = Vector2.ZERO
+	for i in range(1, chain.size()):
+		centroid += chain[i]
+	centroid /= float(chain.size() - 1)
+	assert(centroid.x < chain[0].x, "the body trails the head")
+
+	# --- the HUD readout carries everything the panel draws
+	var readout = main._readout()
+	for key in ["time", "score", "lives", "length", "larder", "speed", "speed_bar", "starving", "best"]:
+		assert(readout.has(key), "readout has " + key)
+	assert(
+		readout["starving"] == (readout["length"] <= main.snake.MIN_SEGMENTS + main.STARVING_MARGIN),
+		"the starving flag matches the larder"
+	)
 
 	# --- hunger: the body burns down on a timer
 	var before_hunger = main.snake.get_point_count()
@@ -187,6 +235,18 @@ func _init():
 	assert(main.elapsed < finished_time, "restart clears the clock")
 	assert(main.lives == 3 and main.score == 0, "restart clears lives and score")
 	assert(main.snake.get_point_count() == main.snake.START_SEGMENTS, "restart resets the body")
+
+	# --- the best run persists, and beats are judged on time first
+	var original_best = Save.load_best()
+	Save.save_best(61.5, 42)
+	var reloaded = Save.load_best()
+	assert(is_equal_approx(reloaded["time"], 61.5), "best time persists")
+	assert(reloaded["score"] == 42, "best score persists")
+	assert(Save.is_better(62.0, 0, reloaded), "a longer run beats the record")
+	assert(not Save.is_better(61.5, 41, reloaded), "a shorter, lower-scoring run does not")
+	assert(Save.is_better(61.5, 43, reloaded), "equal time with more score beats the record")
+	assert(Save.format_best(reloaded).contains("1:01"), "the best line formats the time")
+	Save.save_best(original_best["time"], original_best["score"])
 
 	# --- music phase mapping, driven without the addon installed
 	var recorder = Recorder.new()

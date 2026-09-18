@@ -5,6 +5,7 @@ extends Node
 # simply starts making music once the addon is installed.
 const PROJECT_SECRET := "snake-simulation"
 const RECIPE := "adventure"
+const MENU_SEED := "snake-menu"
 
 var player: Node = null
 var is_generated := false
@@ -21,6 +22,28 @@ func _create_player() -> Node:
 	return instance
 
 
+# Drop the addon node while we can. NOTE: freeing it here is correct hygiene but
+# does NOT clear the AudioStreamGeneratorPlayback that Godot reports as leaked at
+# exit; that reference is held inside the extension and survives the node. The
+# window-close path below is the best a consumer can do. Reported upstream.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_release_player()
+
+
+func _exit_tree() -> void:
+	_release_player()
+
+
+func _release_player() -> void:
+	if player == null:
+		return
+	remove_child(player)
+	player.free()
+	player = null
+	is_generated = false
+
+
 func _ready() -> void:
 	player = _create_player()
 	if player == null:
@@ -32,6 +55,20 @@ func _ready() -> void:
 	player.set("recipe", RECIPE)
 	if player.get("project_secret") != PROJECT_SECRET:
 		push_warning("Gamestruments: project_secret was not accepted")
+
+
+# The title screen gets its own bed so the game is not silent before a run.
+func start_menu() -> void:
+	if player == null:
+		return
+	player.set("style", "folk")
+	player.set("energy", 0.2)
+	player.set("complexity", 0.25)
+	player.set("brightness", 0.75)
+	player.set("syncopation", 0.3)
+	is_generated = player.call("generate", MENU_SEED)
+	if not is_generated:
+		push_warning("Gamestruments: failed to generate menu music")
 
 
 func start_run(seed: String, style_name: String, energy: float, complexity: float,

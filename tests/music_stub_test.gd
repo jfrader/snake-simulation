@@ -35,9 +35,16 @@ class TestMusic extends "res://src/MusicManager.gd":
 	func _create_player():
 		return Stub.new()
 
+
+# The addon ships with the repo, so "not installed" is simulated rather than
+# assumed, or the test would flip meaning depending on the environment.
+class NoAddonMusic extends "res://src/MusicManager.gd":
+	func _create_player():
+		return null
+
 func _init():
 	# Absent addon: the layer must be a silent no-op.
-	var absent = load("res://src/MusicManager.gd").new()
+	var absent = NoAddonMusic.new()
 	root.add_child(absent)
 	await process_frame
 	assert(absent.player == null, "no player when the addon is missing")
