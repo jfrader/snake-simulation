@@ -35,12 +35,13 @@ const BLINK_INTERVAL := 0.1
 const BLINK_ALPHA := 0.3
 
 # Slither: frequency in radians/second, phase step per segment, and amplitude as
-# a fraction of body width so a fat snake wobbles proportionally. Kept gentle:
-# the wave is added on top of the solved chain, so a large amplitude fights the
-# constraint on the next frame and reads as jitter.
-const WAVE_FREQUENCY := 7.5
-const WAVE_PHASE_STEP := 0.25
-const WAVE_AMPLITUDE_RATIO := 0.08
+# a fraction of body width so a fat snake wobbles proportionally. The wave is
+# drawn on top of the solved chain and never fed back into it, so it can be
+# generous; the cap only stops it from tearing the links apart.
+const WAVE_FREQUENCY := 10.0
+const WAVE_PHASE_STEP := 0.3
+const WAVE_AMPLITUDE_RATIO := 0.16
+const WAVE_MAX_AMPLITUDE := LINK_LENGTH * 0.55
 
 var start_speed := 300.0
 var speed := 300.0
@@ -264,7 +265,7 @@ func _wobble_offset(i: int) -> Vector2:
 	if link.length_squared() < 0.0001:
 		return Vector2.ZERO
 	var link_dir = link.normalized()
-	var amplitude = width * WAVE_AMPLITUDE_RATIO
+	var amplitude = minf(width * WAVE_AMPLITUDE_RATIO, WAVE_MAX_AMPLITUDE)
 	var wave = sin(_time * WAVE_FREQUENCY - i * WAVE_PHASE_STEP) * amplitude
 	return Vector2(link_dir.y, -link_dir.x) * wave
 

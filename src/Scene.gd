@@ -30,6 +30,8 @@ var lives := STARTING_LIVES
 var fruit_eaten := 0
 var difficulty = null
 var best := {"time": 0.0, "score": 0}
+# The section currently requested, so the scene only speaks on a change.
+var _last_cue := ""
 
 var arena: Node2D
 var hud: CanvasLayer
@@ -129,7 +131,7 @@ func go_to_menu() -> void:
 	hud.set_play_hud_visible(false)
 	_apply_playfield_active()
 	music.start_menu()
-	music.update_state("camp", 0.0, 0.0, false)
+	_cue("camp")
 
 
 func start_run() -> void:
@@ -164,6 +166,7 @@ func start_run() -> void:
 		difficulty.style, difficulty.energy,
 		difficulty.complexity, difficulty.brightness, difficulty.syncopation
 	)
+	_last_cue = ""
 	update_music_state()
 
 
@@ -210,35 +213,39 @@ func _spawn_enemy() -> void:
 	enemy.set_process(not is_paused)
 
 
+# Music follows the run through bar-aligned section cues. The kit commits a
+# change on the next bar and starts a section at its phrase bar zero, so a cue
+# fired every frame would restart the music every bar. The scene therefore only
+# speaks when the situation actually CHANGES, and stays quiet otherwise to let
+# the score's own form keep touring.
 func update_music_state() -> void:
 	if state != State.PLAYING or difficulty == null:
 		return
 
-	var greed = snake.get_slowness()
 	var head_position = snake.points[0] if snake.points.size() > 0 else Vector2.ZERO
-
 	var nearest = INF
 	for enemy in enemies:
 		if is_instance_valid(enemy):
 			nearest = minf(nearest, enemy.global_position.distance_to(head_position))
 
-	# Home section follows pressure; an enemy on the snake takes over, and late
-	# in a run that escalates to the boss section. Gorging while clear is the
-	# sanctuary moment.
-	var phase = "dungeon" if difficulty.pressure >= RunScript.DUNGEON_PRESSURE else "explore"
-	var threat = difficulty.threat
-
+	var section := ""
 	if nearest < DANGER_RADIUS:
-		phase = "combat"
-		var proximity = clampf(1.0 - nearest / DANGER_RADIUS, 0.0, 1.0)
-		threat = minf(1.0, difficulty.threat * 0.5 + proximity * 0.6)
-		if difficulty.pressure >= RunScript.BOSS_PRESSURE:
-			# Adventure escalates a combat request with threat >= 0.85 to boss.
-			threat = maxf(threat, 0.9)
-	elif greed >= 0.85:
-		phase = "sanctuary"
+		section = "boss" if difficulty.pressure >= RunScript.BOSS_PRESSURE else "chase"
+	elif snake.get_slowness() >= 0.85:
+		section = "sanctuary"
 
-	music.update_state(phase, greed, threat, false)
+	_cue(section)
+
+
+# Forwards a section only when it differs from what was last requested. An empty
+# section means "no event": nothing is sent, and the next event will be a change
+# again. This is what lets a section transition on a bar boundary and play out,
+# instead of being restarted every bar.
+func _cue(section: String) -> void:
+	if section == _last_cue:
+		return
+	_last_cue = section
+	music.cue(section)
 
 
 # Every value and ratio the HUD shows, computed here so the HUD stays
@@ -343,4 +350,4 @@ func game_over() -> void:
 	)
 	_hide_playfield()
 	_apply_playfield_active()
-	music.update_state("camp", 0.0, 0.0, false)
+	_cue("dawn")

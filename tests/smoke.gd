@@ -7,14 +7,18 @@ const Save = preload("res://src/Save.gd")
 #     godot --headless -s tests/smoke.gd
 
 class Recorder extends Node:
-	var states := []
+	var cues := []
 	var runs := []
 
 	func start_run(seed, _style, _energy, _complexity, _brightness, _syncopation):
 		runs.append(seed)
 
-	func update_state(phase, discovery, threat, quest_complete):
-		states.append([phase, discovery, threat, quest_complete])
+	func cue(section):
+		if not str(section).is_empty():
+			cues.append(section)
+
+	func get_section():
+		return cues.back() if cues.size() > 0 else ""
 
 
 func _key(code: int) -> InputEventKey:
@@ -43,6 +47,7 @@ func _init():
 	if ClassDB.class_exists("GamestrumentsPlayer"):
 		assert(main.music.player != null, "music wired to the vendored addon")
 		assert(main.music.is_generated, "menu music generated")
+		assert(main._last_cue == "camp", "menu cues the camp section")
 
 	# --- SPACE starts a run
 	main._input(_key(KEY_SPACE))
@@ -260,41 +265,74 @@ func _init():
 	assert(recorder.runs.size() == 1, "music is generated once per run")
 	assert(not str(recorder.runs[0]).is_empty(), "the run seed is not empty")
 
-	# Home phase follows pressure. Checked with no enemies on the field, since a
-	# nearby enemy is supposed to take over.
+	# --- music cues: only on a change, and a section is never restarted
 	main.elapsed = 0.0
 	main.snake.reset_body(main.arena.bounds)
 	main.clear_enemies()
 	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_slowness())
-	recorder.states.clear()
-	main.update_music_state()
-	assert(recorder.states[0][0] == "explore", "an early run sits in explore")
+	recorder.cues.clear()
+	for i in range(30):
+		main.update_music_state()
+	assert(recorder.cues.is_empty(), "a calm, clear run cues nothing")
+	assert(main._last_cue == "", "no section is requested while calm")
 
-	main.elapsed = 300.0
+	# distant enemies are not an event
+	main.elapsed = 120.0
 	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_slowness())
-	recorder.states.clear()
-	main.update_music_state()
-	assert(recorder.states[0][0] == "dungeon", "a late run sits in dungeon")
-	assert(main.difficulty.pressure >= main.RunScript.BOSS_PRESSURE, "pressure is boss-deep")
-
-	# something on the snake takes over, and deep pressure escalates to boss
 	main._apply_difficulty()
-	assert(main.enemies.size() > 0, "a late run fields a pack")
-	main.enemies[0].position = main.snake.points[0]
-	recorder.states.clear()
+	assert(main.enemies.size() > 0, "a mid run fields enemies")
+	for enemy in main.enemies:
+		enemy.position = Vector2(-9999, -9999)
+	recorder.cues.clear()
 	main.update_music_state()
-	assert(recorder.states[0][0] == "combat", "a close enemy switches to combat")
-	assert(recorder.states[0][2] >= 0.85, "boss escalation carries enough threat")
+	assert(recorder.cues.is_empty(), "distant enemies cue nothing")
+
+	# an enemy on the snake cues the pursuit section
+	main.enemies[0].position = main.snake.points[0]
+	recorder.cues.clear()
+	main.update_music_state()
+	assert(recorder.cues.size() == 1 and recorder.cues[0] == "chase",
+		"a close enemy cues chase (got %s)" % [recorder.cues])
+
+	# the whole point: repeating the same situation must NOT re-cue, or the
+	# section restarts on every bar instead of transitioning
+	recorder.cues.clear()
+	for i in range(60):
+		main.enemies[0].position = main.snake.points[0]
+		main.update_music_state()
+	assert(recorder.cues.is_empty(), "an unchanged situation does not re-cue")
+
+	# escaping re-arms the cue
+	main.enemies[0].position = Vector2(-9999, -9999)
+	main.update_music_state()
+	main.enemies[0].position = main.snake.points[0]
+	recorder.cues.clear()
+	main.update_music_state()
+	assert(recorder.cues.size() == 1 and recorder.cues[0] == "chase",
+		"the same cue fires again after the situation clears")
+
+	# deep pressure while engaged escalates to boss
+	main.elapsed = 400.0
+	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_slowness())
+	main.enemies[0].position = Vector2(-9999, -9999)
+	main.update_music_state()   # clears the cue so the next one can fire
+	main.enemies[0].position = main.snake.points[0]
+	recorder.cues.clear()
+	main.update_music_state()
+	assert(main.difficulty.pressure >= main.RunScript.BOSS_PRESSURE, "pressure is boss-deep")
+	assert(recorder.cues.size() == 1 and recorder.cues[0] == "boss",
+		"deep pressure while engaged cues boss (got %s)" % [recorder.cues])
 
 	# gorging while clear is the sanctuary moment
 	main.elapsed = 0.0
 	main.clear_enemies()
 	main.snake.grow(500)
 	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_slowness())
-	recorder.states.clear()
+	main.enemies.clear()
+	recorder.cues.clear()
 	main.update_music_state()
-	assert(recorder.states[0][0] == "sanctuary", "a gorged, clear snake reaches sanctuary")
-
+	assert(recorder.cues.size() == 1 and recorder.cues[0] == "sanctuary",
+		"a gorged, clear snake cues sanctuary (got %s)" % [recorder.cues])
 
 	print("SMOKE TEST PASSED")
 	quit()
