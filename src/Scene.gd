@@ -30,6 +30,8 @@ var score := 0
 var lives := STARTING_LIVES
 var difficulty = null
 var best := {"time": 0.0, "score": 0}
+# Where the record lives. Tests point this at a throwaway file.
+var save_path := Save.PATH
 var run_index := 0
 # The section currently requested, so the scene only speaks on a change.
 var _last_cue := ""
@@ -65,7 +67,7 @@ func _ready() -> void:
 	food = FoodScript.new()
 	add_child(food)
 
-	best = Save.load_best()
+	best = Save.load_best(save_path)
 	go_to_menu()
 
 
@@ -188,25 +190,33 @@ func clear_enemies() -> void:
 
 
 func _process(delta: float) -> void:
-	if is_paused:
+	if is_paused or state != State.PLAYING:
 		return
 
-	if state == State.PLAYING:
-		elapsed += delta
-		check_collisions()
-		_apply_difficulty()
-		if snake.tick_hunger(delta):
-			_starve()
-		refresh_hud()
-		update_music_state()
-		sfx.update_motion(_motion())
+	elapsed += delta
+	check_collisions()
+	if state != State.PLAYING:
+		# A collision just ended the run. Stop here: spawning more enemies after
+		# the world was cleared would leave them roaming the game-over card.
+		return
+
+	_apply_difficulty()
+
+	if snake.tick_hunger(delta):
+		_starve()
+		if state != State.PLAYING:
+			return
+
+	refresh_hud()
+	update_music_state()
+	sfx.update_motion(_motion())
 
 
-# The run's difficulty is recomputed every frame from time and greed, so it
-# rises smoothly instead of in level steps. Enemies are added as pressure
+# The run's difficulty is recomputed every frame from elapsed time and how
+# full the larder is, so it rises smoothly instead of in steps. Enemies are added as pressure
 # climbs and never removed: a hit slims the snake but does not call off the hunt.
 func _apply_difficulty() -> void:
-	difficulty = RunScript.get_difficulty(elapsed, snake.get_slowness())
+	difficulty = RunScript.get_difficulty(elapsed, snake.get_larder_ratio())
 	while enemies.size() < difficulty.enemy_count:
 		_spawn_enemy()
 	for enemy in enemies:
@@ -243,16 +253,16 @@ func update_music_state() -> void:
 	var section := ""
 	if nearest < DANGER_RADIUS:
 		section = "boss" if difficulty.pressure >= RunScript.BOSS_PRESSURE else "chase"
-	elif snake.get_slowness() >= 0.85:
+	elif snake.get_larder_ratio() >= 0.85:
 		section = "sanctuary"
 
 	_cue(section)
 
 
 # Forwards a section only when it differs from what was last requested. An empty
-# section means "no event": nothing is sent, and the next event will be a change
-# again. This is what lets a section transition on a bar boundary and play out,
-# instead of being restarted every bar.
+# section means "no event" and is forwarded as such; MusicManager is what drops
+# it. Recording it here is what re-arms the next event as a change, so a section
+# transitions on a bar boundary and plays out instead of restarting every bar.
 func _cue(section: String) -> void:
 	if section == _last_cue:
 		return
@@ -278,7 +288,7 @@ func _readout() -> Dictionary:
 		"score": score,
 		"lives": lives,
 		"length": snake.get_point_count(),
-		"larder": snake.get_slowness(),
+		"larder": snake.get_larder_ratio(),
 		"speed": speed_ratio,
 		"speed_bar": _motion(),
 		"starving": snake.get_point_count() <= SnakeScript.MIN_SEGMENTS + STARVING_MARGIN,
@@ -335,6 +345,8 @@ func eat_food() -> void:
 
 
 func take_damage() -> void:
+	if state != State.PLAYING:
+		return
 	lives -= 1
 	refresh_hud()
 	if lives <= 0:
@@ -345,6 +357,8 @@ func take_damage() -> void:
 
 # Ran out of larder: one life, and a fresh buffer to eat back up from.
 func _starve() -> void:
+	if state != State.PLAYING:
+		return
 	lives -= 1
 	refresh_hud()
 	if lives <= 0:
@@ -355,6 +369,9 @@ func _starve() -> void:
 
 
 func game_over() -> void:
+	# Idempotent: cancelling damage and starving can both land in the same frame.
+	if state == State.GAME_OVER:
+		return
 	state = State.GAME_OVER
 	sfx.play_death()
 	refresh_hud()
@@ -362,7 +379,7 @@ func game_over() -> void:
 	var improved = Save.is_better(elapsed, score, best)
 	if improved:
 		best = {"time": elapsed, "score": score}
-		Save.save_best(elapsed, score)
+		Save.save_best(elapsed, score, save_path)
 
 	hud.show_title(
 		"NEW BEST" if improved else "RUN OVER",

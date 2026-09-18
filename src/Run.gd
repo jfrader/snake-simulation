@@ -6,7 +6,7 @@ extends RefCounted
 const BASE_SPEED := 340.0
 
 const SECONDS_PER_PRESSURE := 25.0
-const GREED_PRESSURE := 6.0
+const LARDER_PRESSURE := 6.0
 const PRESSURE_PER_ENEMY := 1.5
 const MAX_ENEMIES := 12
 const BASE_ENEMY_SPEED := 90.0
@@ -46,8 +46,10 @@ class Difficulty:
 	var syncopation := 0.0
 
 
-static func get_difficulty(elapsed: float, greed: float) -> Difficulty:
-	var pressure = elapsed / SECONDS_PER_PRESSURE + greed * GREED_PRESSURE
+static func get_difficulty(elapsed: float, larder: float) -> Difficulty:
+	# `larder` is Snake.get_larder_ratio(): how much of its maximum body the
+	# snake is carrying. A fuller snake makes the world nastier.
+	var pressure = elapsed / SECONDS_PER_PRESSURE + larder * LARDER_PRESSURE
 	var difficulty = Difficulty.new()
 	difficulty.pressure = pressure
 	difficulty.enemy_count = clampi(int(pressure / PRESSURE_PER_ENEMY), 0, MAX_ENEMIES)

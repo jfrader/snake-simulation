@@ -34,7 +34,6 @@ const FOOD_TYPES := {
 
 var arena_bounds := Rect2()
 var score := 1
-var current_type := ""
 
 var collision_poly: CollisionPolygon2D
 
@@ -54,10 +53,10 @@ func _ready() -> void:
 # The scene sets arena_bounds before the first respawn, so the play field is
 # always known here.
 func respawn() -> void:
-	current_type = _choose_random_type()
-	_apply_type(current_type)
+	var chosen = _choose_random_type()
+	_apply_type(chosen)
 
-	var half = FOOD_TYPES[current_type]["size"]
+	var half = FOOD_TYPES[chosen]["size"]
 	position = Vector2(
 		randf_range(arena_bounds.position.x + half, arena_bounds.end.x - half),
 		randf_range(arena_bounds.position.y + half, arena_bounds.end.y - half)
