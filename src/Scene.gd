@@ -27,7 +27,6 @@ var enemies: Array = []
 var elapsed := 0.0
 var score := 0
 var lives := STARTING_LIVES
-var fruit_eaten := 0
 var difficulty = null
 var best := {"time": 0.0, "score": 0}
 # The section currently requested, so the scene only speaks on a change.
@@ -138,7 +137,6 @@ func start_run() -> void:
 	elapsed = 0.0
 	score = 0
 	lives = STARTING_LIVES
-	fruit_eaten = 0
 	difficulty = RunScript.get_difficulty(0.0, 0.0)
 
 	state = State.PLAYING
@@ -309,7 +307,6 @@ func _global_polygon(polygon_node) -> PackedVector2Array:
 func eat_food() -> void:
 	snake.grow(food.score)
 	score += food.score
-	fruit_eaten += 1
 	food.respawn()
 	refresh_hud()
 

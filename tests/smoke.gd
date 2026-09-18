@@ -62,7 +62,6 @@ func _init():
 	var length_before = main.snake.get_point_count()
 	main.food.position = main.snake.points[0]
 	await _settle()
-	assert(main.fruit_eaten == 1, "fruit eaten through real collision")
 	assert(main.score > score_before, "eating raises the score")
 	assert(main.snake.get_point_count() > length_before, "eating adds length")
 

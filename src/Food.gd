@@ -36,13 +36,13 @@ var arena_bounds := Rect2()
 var score := 1
 var current_type := ""
 
-var collision_area: Area2D
 var collision_poly: CollisionPolygon2D
 
 
 func _ready() -> void:
 	hide()
-	collision_area = Area2D.new()
+	# Named so the scene can find it: "CollisionArea/CollisionPolygon2D".
+	var collision_area = Area2D.new()
 	collision_area.name = "CollisionArea"
 	add_child(collision_area)
 
