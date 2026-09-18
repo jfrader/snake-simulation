@@ -24,8 +24,6 @@ var speed := 150.0
 var direction := Vector2.RIGHT
 
 var _patrol_timer := 0.0
-var collision_area: Area2D
-var collision_poly: CollisionPolygon2D
 
 
 func _ready() -> void:
@@ -37,11 +35,12 @@ func _ready() -> void:
 	])
 	color = COLOR
 
-	collision_area = Area2D.new()
+	# Named so the scene can find it: "CollisionArea/CollisionPolygon2D".
+	var collision_area = Area2D.new()
 	collision_area.name = "CollisionArea"
 	add_child(collision_area)
 
-	collision_poly = CollisionPolygon2D.new()
+	var collision_poly = CollisionPolygon2D.new()
 	collision_poly.name = "CollisionPolygon2D"
 	collision_poly.polygon = polygon
 	collision_area.add_child(collision_poly)

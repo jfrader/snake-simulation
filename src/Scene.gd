@@ -6,11 +6,14 @@ const FoodScript = preload("res://src/Food.gd")
 const HudScript = preload("res://src/HUD.gd")
 const MusicScript = preload("res://src/MusicManager.gd")
 const RunScript = preload("res://src/Run.gd")
+const Save = preload("res://src/Save.gd")
 const SnakeScript = preload("res://src/Snake.gd")
 
 # An enemy inside this range escalates the score to combat.
 const DANGER_RADIUS := 240.0
 const STARTING_LIVES := 3
+# How close to the floor counts as starving, for the HUD warning.
+const STARVING_MARGIN := 4
 
 enum State { MENU, PLAYING, GAME_OVER }
 
@@ -24,8 +27,10 @@ var enemies: Array = []
 var elapsed := 0.0
 var score := 0
 var lives := STARTING_LIVES
-var fruit_eaten := 0
 var difficulty = null
+var best := {"time": 0.0, "score": 0}
+# The section currently requested, so the scene only speaks on a change.
+var _last_cue := ""
 
 var arena: Node2D
 var hud: CanvasLayer
@@ -49,6 +54,7 @@ func _ready() -> void:
 	food = FoodScript.new()
 	add_child(food)
 
+	best = Save.load_best()
 	go_to_menu()
 
 
@@ -63,9 +69,14 @@ func _input(event: InputEvent) -> void:
 		KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT:
 			if state == State.PLAYING and not is_paused:
 				snake.steer(_direction_for_key(event.keycode))
-		KEY_P, KEY_ESCAPE:
+		KEY_P:
 			if state == State.PLAYING:
 				set_paused(not is_paused)
+		KEY_ESCAPE:
+			if state == State.PLAYING:
+				set_paused(not is_paused)
+			else:
+				get_tree().quit()
 
 
 func _direction_for_key(keycode: int) -> Vector2:
@@ -82,8 +93,14 @@ func _direction_for_key(keycode: int) -> Vector2:
 
 func set_paused(paused: bool) -> void:
 	is_paused = paused
-	hud.set_paused(paused)
+	hud.set_paused(paused, _pause_detail())
 	_apply_playfield_active()
+
+
+func _pause_detail() -> String:
+	return "Time %s  ·  Score %d  ·  Length %d" % [
+		RunScript.format_time(elapsed), score, snake.get_point_count()
+	]
 
 
 # Gameplay nodes only run while the playfield is live, so they never have to
@@ -104,17 +121,22 @@ func _hide_playfield() -> void:
 
 func go_to_menu() -> void:
 	state = State.MENU
-	hud.show_title("SNAKE SIMULATION", "Press SPACE to start  ·  Arrows steer  ·  P pauses")
+	hud.show_title(
+		"SNAKE SIMULATION",
+		"BEST  " + Save.format_best(best),
+		"SPACE to start   ·   Arrows steer   ·   P pause   ·   ESC quit"
+	)
 	_hide_playfield()
+	hud.set_play_hud_visible(false)
 	_apply_playfield_active()
-	music.update_state("camp", 0.0, 0.0, false)
+	music.start_menu()
+	_cue("camp")
 
 
 func start_run() -> void:
 	elapsed = 0.0
 	score = 0
 	lives = STARTING_LIVES
-	fruit_eaten = 0
 	difficulty = RunScript.get_difficulty(0.0, 0.0)
 
 	state = State.PLAYING
@@ -133,6 +155,7 @@ func start_run() -> void:
 
 	snake.show()
 	food.show()
+	hud.set_play_hud_visible(true)
 	_apply_playfield_active()
 
 	refresh_hud()
@@ -141,6 +164,7 @@ func start_run() -> void:
 		difficulty.style, difficulty.energy,
 		difficulty.complexity, difficulty.brightness, difficulty.syncopation
 	)
+	_last_cue = ""
 	update_music_state()
 
 
@@ -187,42 +211,61 @@ func _spawn_enemy() -> void:
 	enemy.set_process(not is_paused)
 
 
+# Music follows the run through bar-aligned section cues. The kit commits a
+# change on the next bar and starts a section at its phrase bar zero, so a cue
+# fired every frame would restart the music every bar. The scene therefore only
+# speaks when the situation actually CHANGES, and stays quiet otherwise to let
+# the score's own form keep touring.
 func update_music_state() -> void:
 	if state != State.PLAYING or difficulty == null:
 		return
 
-	var greed = snake.get_slowness()
 	var head_position = snake.points[0] if snake.points.size() > 0 else Vector2.ZERO
-
 	var nearest = INF
 	for enemy in enemies:
 		if is_instance_valid(enemy):
 			nearest = minf(nearest, enemy.global_position.distance_to(head_position))
 
-	# Home section follows pressure; an enemy on the snake takes over, and late
-	# in a run that escalates to the boss section. Gorging while clear is the
-	# sanctuary moment.
-	var phase = "dungeon" if difficulty.pressure >= RunScript.DUNGEON_PRESSURE else "explore"
-	var threat = difficulty.threat
-
+	var section := ""
 	if nearest < DANGER_RADIUS:
-		phase = "combat"
-		var proximity = clampf(1.0 - nearest / DANGER_RADIUS, 0.0, 1.0)
-		threat = minf(1.0, difficulty.threat * 0.5 + proximity * 0.6)
-		if difficulty.pressure >= RunScript.BOSS_PRESSURE:
-			# Adventure escalates a combat request with threat >= 0.85 to boss.
-			threat = maxf(threat, 0.9)
-	elif greed >= 0.85:
-		phase = "sanctuary"
+		section = "boss" if difficulty.pressure >= RunScript.BOSS_PRESSURE else "chase"
+	elif snake.get_slowness() >= 0.85:
+		section = "sanctuary"
 
-	music.update_state(phase, greed, threat, false)
+	_cue(section)
+
+
+# Forwards a section only when it differs from what was last requested. An empty
+# section means "no event": nothing is sent, and the next event will be a change
+# again. This is what lets a section transition on a bar boundary and play out,
+# instead of being restarted every bar.
+func _cue(section: String) -> void:
+	if section == _last_cue:
+		return
+	_last_cue = section
+	music.cue(section)
+
+
+# Every value and ratio the HUD shows, computed here so the HUD stays
+# presentational.
+func _readout() -> Dictionary:
+	var speed_ratio = snake.speed / snake.start_speed if snake.start_speed > 0.0 else 1.0
+	var floor_ratio = SnakeScript.MIN_SPEED_RATIO
+	return {
+		"time": RunScript.format_time(elapsed),
+		"score": score,
+		"lives": lives,
+		"length": snake.get_point_count(),
+		"larder": snake.get_slowness(),
+		"speed": speed_ratio,
+		"speed_bar": (speed_ratio - floor_ratio) / maxf(0.001, 1.0 - floor_ratio),
+		"starving": snake.get_point_count() <= SnakeScript.MIN_SEGMENTS + STARVING_MARGIN,
+		"best": best,
+	}
 
 
 func refresh_hud() -> void:
-	var speed_ratio = snake.speed / snake.start_speed if snake.start_speed > 0.0 else 1.0
-	hud.update_hud(
-		RunScript.format_time(elapsed), score, lives, snake.get_point_count(), speed_ratio
-	)
+	hud.update_hud(_readout())
 
 
 func check_collisions() -> void:
@@ -264,7 +307,6 @@ func _global_polygon(polygon_node) -> PackedVector2Array:
 func eat_food() -> void:
 	snake.grow(food.score)
 	score += food.score
-	fruit_eaten += 1
 	food.respawn()
 	refresh_hud()
 
@@ -291,12 +333,18 @@ func _starve() -> void:
 
 func game_over() -> void:
 	state = State.GAME_OVER
+	refresh_hud()
+
+	var improved = Save.is_better(elapsed, score, best)
+	if improved:
+		best = {"time": elapsed, "score": score}
+		Save.save_best(elapsed, score)
+
 	hud.show_title(
-		"RUN OVER",
-		"Survived %s  ·  Score %d  ·  Press SPACE to go again" % [
-			RunScript.format_time(elapsed), score
-		]
+		"NEW BEST" if improved else "RUN OVER",
+		"Survived %s  ·  Score %d" % [RunScript.format_time(elapsed), score],
+		"BEST  %s   ·   SPACE to go again   ·   ESC to quit" % Save.format_best(best)
 	)
 	_hide_playfield()
 	_apply_playfield_active()
-	music.update_state("camp", 0.0, 0.0, false)
+	_cue("dawn")

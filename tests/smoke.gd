@@ -1,18 +1,24 @@
 extends SceneTree
+
+const Save = preload("res://src/Save.gd")
 # End-to-end test of one endless run against the real scene: real _process, real
 # polygon collision, hunger, the difficulty curve, and the music phase mapping.
 #
 #     godot --headless -s tests/smoke.gd
 
 class Recorder extends Node:
-	var states := []
+	var cues := []
 	var runs := []
 
 	func start_run(seed, _style, _energy, _complexity, _brightness, _syncopation):
 		runs.append(seed)
 
-	func update_state(phase, discovery, threat, quest_complete):
-		states.append([phase, discovery, threat, quest_complete])
+	func cue(section):
+		if not str(section).is_empty():
+			cues.append(section)
+
+	func get_section():
+		return cues.back() if cues.size() > 0 else ""
 
 
 func _key(code: int) -> InputEventKey:
@@ -37,6 +43,12 @@ func _init():
 	assert(main.state == main.State.MENU, "boots to MENU")
 	assert(not main.snake.visible, "snake hidden in the menu")
 
+	# --- the addon ships with the repo; if the extension loaded, music must wire
+	if ClassDB.class_exists("GamestrumentsPlayer"):
+		assert(main.music.player != null, "music wired to the vendored addon")
+		assert(main.music.is_generated, "menu music generated")
+		assert(main._last_cue == "camp", "menu cues the camp section")
+
 	# --- SPACE starts a run
 	main._input(_key(KEY_SPACE))
 	assert(main.state == main.State.PLAYING, "SPACE starts the run")
@@ -50,7 +62,6 @@ func _init():
 	var length_before = main.snake.get_point_count()
 	main.food.position = main.snake.points[0]
 	await _settle()
-	assert(main.fruit_eaten == 1, "fruit eaten through real collision")
 	assert(main.score > score_before, "eating raises the score")
 	assert(main.snake.get_point_count() > length_before, "eating adds length")
 
@@ -73,6 +84,47 @@ func _init():
 		"a maxed snake is at the speed floor"
 	)
 	assert(is_equal_approx(main.snake.get_slowness(), 1.0), "a maxed snake is fully slowed")
+
+	# --- the body is a distance-constrained rope: no gaps, no inversions
+	main.start_run()
+	main.snake.grow(20)
+	await _settle(30)
+	var chain = main.snake.points
+	assert(chain.size() > 20, "the rope has the grown length")
+	# The solved chain is exact: that is what makes the motion stable.
+	main.snake._solve_body()
+	var solved = main.snake._chain
+	var worst = 0.0
+	for i in range(1, solved.size()):
+		worst = maxf(worst, absf(solved[i].distance_to(solved[i - 1]) - main.snake.LINK_LENGTH))
+	assert(worst < 0.01, "the solved chain holds its links exactly (worst %.4f)" % worst)
+
+	# The drawn line adds the wave on top, so it may sit slightly off nominal but
+	# must never gap or collapse.
+	var shortest = INF
+	var longest = 0.0
+	for i in range(1, chain.size()):
+		var link = chain[i].distance_to(chain[i - 1])
+		shortest = minf(shortest, link)
+		longest = maxf(longest, link)
+	var slack = main.snake.width * main.snake.WAVE_AMPLITUDE_RATIO * 2.0 + 0.2
+	assert(shortest > main.snake.LINK_LENGTH - slack, "no drawn link collapses (%.3f)" % shortest)
+	assert(longest < main.snake.LINK_LENGTH + slack, "no drawn link stretches (%.3f)" % longest)
+
+	var centroid = Vector2.ZERO
+	for i in range(1, chain.size()):
+		centroid += chain[i]
+	centroid /= float(chain.size() - 1)
+	assert(centroid.x < chain[0].x, "the body trails the head")
+
+	# --- the HUD readout carries everything the panel draws
+	var readout = main._readout()
+	for key in ["time", "score", "lives", "length", "larder", "speed", "speed_bar", "starving", "best"]:
+		assert(readout.has(key), "readout has " + key)
+	assert(
+		readout["starving"] == (readout["length"] <= main.snake.MIN_SEGMENTS + main.STARVING_MARGIN),
+		"the starving flag matches the larder"
+	)
 
 	# --- hunger: the body burns down on a timer
 	var before_hunger = main.snake.get_point_count()
@@ -188,6 +240,18 @@ func _init():
 	assert(main.lives == 3 and main.score == 0, "restart clears lives and score")
 	assert(main.snake.get_point_count() == main.snake.START_SEGMENTS, "restart resets the body")
 
+	# --- the best run persists, and beats are judged on time first
+	var original_best = Save.load_best()
+	Save.save_best(61.5, 42)
+	var reloaded = Save.load_best()
+	assert(is_equal_approx(reloaded["time"], 61.5), "best time persists")
+	assert(reloaded["score"] == 42, "best score persists")
+	assert(Save.is_better(62.0, 0, reloaded), "a longer run beats the record")
+	assert(not Save.is_better(61.5, 41, reloaded), "a shorter, lower-scoring run does not")
+	assert(Save.is_better(61.5, 43, reloaded), "equal time with more score beats the record")
+	assert(Save.format_best(reloaded).contains("1:01"), "the best line formats the time")
+	Save.save_best(original_best["time"], original_best["score"])
+
 	# --- music phase mapping, driven without the addon installed
 	var recorder = Recorder.new()
 	main.music.queue_free()
@@ -200,41 +264,74 @@ func _init():
 	assert(recorder.runs.size() == 1, "music is generated once per run")
 	assert(not str(recorder.runs[0]).is_empty(), "the run seed is not empty")
 
-	# Home phase follows pressure. Checked with no enemies on the field, since a
-	# nearby enemy is supposed to take over.
+	# --- music cues: only on a change, and a section is never restarted
 	main.elapsed = 0.0
 	main.snake.reset_body(main.arena.bounds)
 	main.clear_enemies()
 	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_slowness())
-	recorder.states.clear()
-	main.update_music_state()
-	assert(recorder.states[0][0] == "explore", "an early run sits in explore")
+	recorder.cues.clear()
+	for i in range(30):
+		main.update_music_state()
+	assert(recorder.cues.is_empty(), "a calm, clear run cues nothing")
+	assert(main._last_cue == "", "no section is requested while calm")
 
-	main.elapsed = 300.0
+	# distant enemies are not an event
+	main.elapsed = 120.0
 	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_slowness())
-	recorder.states.clear()
-	main.update_music_state()
-	assert(recorder.states[0][0] == "dungeon", "a late run sits in dungeon")
-	assert(main.difficulty.pressure >= main.RunScript.BOSS_PRESSURE, "pressure is boss-deep")
-
-	# something on the snake takes over, and deep pressure escalates to boss
 	main._apply_difficulty()
-	assert(main.enemies.size() > 0, "a late run fields a pack")
-	main.enemies[0].position = main.snake.points[0]
-	recorder.states.clear()
+	assert(main.enemies.size() > 0, "a mid run fields enemies")
+	for enemy in main.enemies:
+		enemy.position = Vector2(-9999, -9999)
+	recorder.cues.clear()
 	main.update_music_state()
-	assert(recorder.states[0][0] == "combat", "a close enemy switches to combat")
-	assert(recorder.states[0][2] >= 0.85, "boss escalation carries enough threat")
+	assert(recorder.cues.is_empty(), "distant enemies cue nothing")
+
+	# an enemy on the snake cues the pursuit section
+	main.enemies[0].position = main.snake.points[0]
+	recorder.cues.clear()
+	main.update_music_state()
+	assert(recorder.cues.size() == 1 and recorder.cues[0] == "chase",
+		"a close enemy cues chase (got %s)" % [recorder.cues])
+
+	# the whole point: repeating the same situation must NOT re-cue, or the
+	# section restarts on every bar instead of transitioning
+	recorder.cues.clear()
+	for i in range(60):
+		main.enemies[0].position = main.snake.points[0]
+		main.update_music_state()
+	assert(recorder.cues.is_empty(), "an unchanged situation does not re-cue")
+
+	# escaping re-arms the cue
+	main.enemies[0].position = Vector2(-9999, -9999)
+	main.update_music_state()
+	main.enemies[0].position = main.snake.points[0]
+	recorder.cues.clear()
+	main.update_music_state()
+	assert(recorder.cues.size() == 1 and recorder.cues[0] == "chase",
+		"the same cue fires again after the situation clears")
+
+	# deep pressure while engaged escalates to boss
+	main.elapsed = 400.0
+	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_slowness())
+	main.enemies[0].position = Vector2(-9999, -9999)
+	main.update_music_state()   # clears the cue so the next one can fire
+	main.enemies[0].position = main.snake.points[0]
+	recorder.cues.clear()
+	main.update_music_state()
+	assert(main.difficulty.pressure >= main.RunScript.BOSS_PRESSURE, "pressure is boss-deep")
+	assert(recorder.cues.size() == 1 and recorder.cues[0] == "boss",
+		"deep pressure while engaged cues boss (got %s)" % [recorder.cues])
 
 	# gorging while clear is the sanctuary moment
 	main.elapsed = 0.0
 	main.clear_enemies()
 	main.snake.grow(500)
 	main.difficulty = main.RunScript.get_difficulty(main.elapsed, main.snake.get_slowness())
-	recorder.states.clear()
+	main.enemies.clear()
+	recorder.cues.clear()
 	main.update_music_state()
-	assert(recorder.states[0][0] == "sanctuary", "a gorged, clear snake reaches sanctuary")
-
+	assert(recorder.cues.size() == 1 and recorder.cues[0] == "sanctuary",
+		"a gorged, clear snake cues sanctuary (got %s)" % [recorder.cues])
 
 	print("SMOKE TEST PASSED")
 	quit()

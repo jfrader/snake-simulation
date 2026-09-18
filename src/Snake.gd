@@ -19,7 +19,9 @@ const HIT_LOSS_FRACTION := 0.35
 const MIN_SEGMENTS := 10
 const START_SEGMENTS := 20
 const LENGTH_CAP := 80
-const SEGMENT_SPACING := 5.0
+# The rope's fixed link length, and the spacing the body is laid out with.
+const LINK_LENGTH := 5.0
+const BODY_RELAXATIONS := 3
 const START_WIDTH := 8.0
 const WIDTH_PER_SEGMENT := 0.2
 const MAX_WIDTH := START_WIDTH + (LENGTH_CAP - MIN_SEGMENTS) * WIDTH_PER_SEGMENT
@@ -32,9 +34,14 @@ const INVULNERABILITY_TIME := 2.0
 const BLINK_INTERVAL := 0.1
 const BLINK_ALPHA := 0.3
 
-# Lateral wobble of the body: amplitude in pixels, frequency in radians/second.
-const WAVE_AMPLITUDE := 1.0
-const WAVE_FREQUENCY := 20.0
+# Slither: frequency in radians/second, phase step per segment, and amplitude as
+# a fraction of body width so a fat snake wobbles proportionally. The wave is
+# drawn on top of the solved chain and never fed back into it, so it can be
+# generous; the cap only stops it from tearing the links apart.
+const WAVE_FREQUENCY := 10.0
+const WAVE_PHASE_STEP := 0.3
+const WAVE_AMPLITUDE_RATIO := 0.16
+const WAVE_MAX_AMPLITUDE := LINK_LENGTH * 0.55
 
 var start_speed := 300.0
 var speed := 300.0
@@ -53,6 +60,7 @@ var tongue_stem: Line2D
 var tongue_prong_left: Line2D
 var tongue_prong_right: Line2D
 
+var _chain := PackedVector2Array()
 var _time := 0.0
 var _blink_timer := 0.0
 var _tongue_clock := 0.0
@@ -89,17 +97,18 @@ func reset_body(bounds: Rect2) -> void:
 # after a hit.
 func reposition(bounds: Rect2) -> void:
 	arena_bounds = bounds
-	_lay_out(maxi(get_point_count(), MIN_SEGMENTS))
+	_lay_out(maxi(_chain.size(), MIN_SEGMENTS))
 	_apply_size()
 
 
 # A hit costs part of the growth above the base length, never the whole run.
 # Slimming down speeds the snake back up, which is the relief from being slow.
 func take_hit(bounds: Rect2) -> void:
-	var extra = maxi(0, get_point_count() - MIN_SEGMENTS)
+	var extra = maxi(0, _chain.size() - MIN_SEGMENTS)
 	var drop = mini(extra, maxi(2, int(extra * HIT_LOSS_FRACTION)))
 	for i in range(drop):
-		remove_point(get_point_count() - 1)
+		if _chain.size() > MIN_SEGMENTS:
+			_chain.remove_at(_chain.size() - 1)
 	reposition(bounds)
 
 
@@ -109,11 +118,12 @@ func set_base_speed(value: float) -> void:
 
 
 func _lay_out(count: int) -> void:
-	clear_points()
 	direction = Vector2.RIGHT
 	var center = arena_bounds.position + arena_bounds.size / 2.0
+	_chain = PackedVector2Array()
 	for i in range(count):
-		add_point(Vector2(center.x - i * SEGMENT_SPACING, center.y))
+		_chain.append(Vector2(center.x - i * LINK_LENGTH, center.y))
+	_sync_points()
 	adjust_width_curve()
 
 	is_invulnerable = true
@@ -124,7 +134,7 @@ func _lay_out(count: int) -> void:
 # Length is the single source of truth: girth and top speed are both read from
 # it, so nothing can drift out of sync.
 func _apply_size() -> void:
-	var extra = maxi(0, get_point_count() - MIN_SEGMENTS)
+	var extra = maxi(0, _chain.size() - MIN_SEGMENTS)
 	width = minf(MAX_WIDTH, START_WIDTH + extra * WIDTH_PER_SEGMENT)
 	speed = start_speed * lerpf(1.0, MIN_SPEED_RATIO, get_slowness())
 	adjust_head_collision()
@@ -132,9 +142,10 @@ func _apply_size() -> void:
 
 func grow(times: int = 1) -> void:
 	for i in range(times):
-		if get_point_count() >= LENGTH_CAP:
+		if _chain.size() >= LENGTH_CAP:
 			break
 		_append_tail_segment()
+	_sync_points()
 	adjust_width_curve()
 	_apply_size()
 
@@ -148,9 +159,10 @@ func tick_hunger(delta: float) -> bool:
 	if _hunger_clock < interval:
 		return false
 	_hunger_clock -= interval
-	if get_point_count() <= MIN_SEGMENTS:
+	if _chain.size() <= MIN_SEGMENTS:
 		return true
-	remove_point(get_point_count() - 1)
+	_chain.remove_at(_chain.size() - 1)
+	_sync_points()
 	adjust_width_curve()
 	_apply_size()
 	return false
@@ -161,17 +173,17 @@ func get_slowness() -> float:
 	var span = float(LENGTH_CAP - MIN_SEGMENTS)
 	if span <= 0.0:
 		return 0.0
-	return clampf(float(get_point_count() - MIN_SEGMENTS) / span, 0.0, 1.0)
+	return clampf(float(_chain.size() - MIN_SEGMENTS) / span, 0.0, 1.0)
 
 
 func _append_tail_segment() -> void:
-	if points.size() >= 2:
-		var tail = points[points.size() - 1]
-		var before_tail = points[points.size() - 2]
+	if _chain.size() >= 2:
+		var tail = _chain[_chain.size() - 1]
+		var before_tail = _chain[_chain.size() - 2]
 		var growth_direction = (tail - before_tail).normalized()
-		add_point(tail + growth_direction * width)
-	elif points.size() == 1:
-		add_point(points[0] - direction.normalized() * width)
+		_chain.append(tail + growth_direction * width)
+	elif _chain.size() == 1:
+		_chain.append(_chain[0] - direction.normalized() * width)
 
 
 
@@ -182,25 +194,13 @@ func _process(delta: float) -> void:
 	_time += delta
 	_update_tongue(delta)
 
-	var head_position = points[0] + direction * speed * delta
-	set_point_position(0, head_position)
-
-	# `points` returns a copy, so index it once instead of re-fetching it per
-	# segment, and write each new position back as it is computed.
-	var chain = points
-	var vibration_direction = Vector2(direction.y, -direction.x).normalized()
-	var follow = clampf(delta * (speed / 10.0), 0.0, 1.0)
-	for i in range(1, chain.size()):
-		var offset = vibration_direction * (sin(_time * WAVE_FREQUENCY + i * 0.1) * WAVE_AMPLITUDE)
-		# The follow factor must never exceed 1, or a point lands past the one
-		# ahead of it and the body inverts. It exceeds 1 on a frame hitch and at
-		# the higher level speeds.
-		var moved = chain[i].lerp(chain[i - 1] + offset, follow)
-		chain[i] = moved
-		set_point_position(i, moved)
-
+	if _chain.is_empty():
+		return
+	_chain[0] += direction * speed * delta
+	_bounce_off_arena()
+	_solve_body()
+	_sync_points()
 	update_head_collision()
-	_bounce_off_arena(head_position)
 
 
 func _tick_invulnerability(delta: float) -> void:
@@ -214,17 +214,60 @@ func _tick_invulnerability(delta: float) -> void:
 		modulate.a = 1.0
 
 
-func _bounce_off_arena(head_position: Vector2) -> void:
+func _bounce_off_arena() -> void:
 	if arena_bounds.size.x <= 0.0:
 		return
+	var head_position = _chain[0]
 	if head_position.x < arena_bounds.position.x or head_position.x > arena_bounds.end.x:
 		direction.x *= -1.0
 		head_position.x = clampf(head_position.x, arena_bounds.position.x, arena_bounds.end.x)
-		set_point_position(0, head_position)
 	if head_position.y < arena_bounds.position.y or head_position.y > arena_bounds.end.y:
 		direction.y *= -1.0
 		head_position.y = clampf(head_position.y, arena_bounds.position.y, arena_bounds.end.y)
-		set_point_position(0, head_position)
+	_chain[0] = head_position
+
+
+# The body is a rope: every link is held at its fixed length, walked head to
+# tail. Deterministic and frame-rate independent, and unlike a lerp toward the
+# point ahead it can never overshoot and invert. The extra passes let the chain
+# settle around corners.
+#
+# This solves the WAVE-FREE chain on purpose. Adding the wave here and then
+# re-solving from the drawn points next frame feeds the wave back into the
+# link directions and compounds down the body, which is what made the animation
+# shimmer.
+func _solve_body() -> void:
+	for relaxation in range(BODY_RELAXATIONS):
+		for i in range(1, _chain.size()):
+			var link = _chain[i] - _chain[i - 1]
+			var link_dir = link.normalized() if link.length_squared() > 0.0001 else -direction
+			_chain[i] = _chain[i - 1] + link_dir * LINK_LENGTH
+
+
+# Mirror the solved chain onto the drawn line, adding the slither wave. The head
+# is drawn exactly where it is, so what you see matches what collides.
+func _sync_points() -> void:
+	if get_point_count() != _chain.size():
+		clear_points()
+		for point in _chain:
+			add_point(point)
+		return
+	for i in range(_chain.size()):
+		set_point_position(i, _chain[i] + _wobble_offset(i))
+
+
+# Perpendicular to the segment's OWN direction, so the wave travels along the
+# body. A pure function of time, so it re-derives every frame and cannot drift.
+func _wobble_offset(i: int) -> Vector2:
+	if i <= 0 or _chain.size() < 2:
+		return Vector2.ZERO
+	var link = _chain[i] - _chain[i - 1]
+	if link.length_squared() < 0.0001:
+		return Vector2.ZERO
+	var link_dir = link.normalized()
+	var amplitude = minf(width * WAVE_AMPLITUDE_RATIO, WAVE_MAX_AMPLITUDE)
+	var wave = sin(_time * WAVE_FREQUENCY - i * WAVE_PHASE_STEP) * amplitude
+	return Vector2(link_dir.y, -link_dir.x) * wave
 
 
 func update_head_collision() -> void:
